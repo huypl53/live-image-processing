@@ -280,7 +280,14 @@ def cleanup_temp_dirs():
     for d in list(temp_dirs_to_cleanup):
         shutil.rmtree(d, ignore_errors=True)
 
-with gr.Blocks(theme=gr.themes.Soft(), title="Unified UI Image Segmenter") as demo:
+css = """
+#horizontal_gallery > .grid-container {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+}
+"""
+
+with gr.Blocks(theme=gr.themes.Soft(), title="Unified UI Image Segmenter", css=css) as demo:
     gr.Markdown("# Unified UI Image Segmenter")
     gr.Markdown("Upload a screenshot and adjust parameters. See intermediate steps and final segmentation.")
     
@@ -324,7 +331,8 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Unified UI Image Segmenter") as de
                     output_zip = gr.File(label="Download Patches and Metadata (.zip)")
             # Place Intermediate Steps right below the tab bar, in the same column
             gr.Markdown("## Intermediate Steps")
-            step_gallery = gr.Gallery(label="Intermediate Steps", show_label=False, columns=[3, 4], height="auto", object_fit="contain")
+            with gr.Row():
+                step_gallery = gr.Gallery(label="Intermediate Steps", show_label=True, columns=10, height="auto", object_fit="contain", elem_id="horizontal_gallery")
             step_labels = gr.Dataframe(headers=["Step"], label="Step Names", interactive=False, type="array")
 
     # Save Params logic
