@@ -117,9 +117,9 @@ class UnifiedSegmenter:
                 upper, dtype=np.uint8
             )
             mask = cv2.inRange(hsv, lower, upper)
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (self.morph_kernel, self.morph_kernel))
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=self.morph_iter)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=self.morph_iter)
             mask_total = cv2.bitwise_or(mask_total, mask)
             contours, _ = cv2.findContours(
                 mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -377,7 +377,8 @@ def process_and_update(
                 img = steps[key]
                 if len(img.shape) == 2:
                     img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-                step_imgs.append((f"{key}", img))
+                # step_imgs.append((f"{key}", img))
+                step_imgs.append(( img, f"{key}"))
 
         # Save patches
         components = seg_result["components"]
@@ -407,15 +408,15 @@ def process_and_update(
         status = f"Status: Success! Found and extracted {len(components)} components."
 
         # Prepare intermediate images for gallery
-        step_gallery_imgs = [img for _, img in step_imgs]
-        step_gallery_labels = [[name] for name, _ in step_imgs]
+        step_gallery_labels = [[name] for _, name in step_imgs]
 
         return (
             vis_image_rgb,
             patch_files,
             metadata,
             zip_path,
-            step_gallery_imgs,
+            step_imgs,
+            # step_gallery_imgs_labels,
             step_gallery_labels,
             status,
             str(run_temp_dir),
@@ -443,7 +444,7 @@ css = """
 """
 
 with gr.Blocks(
-    title="Unified UI Image Segmenter", css=css
+    title="Unified UI Image Segmenter", css=css, fill_height=True
 ) as demo:
     gr.Markdown("# Unified UI Image Segmenter")
     gr.Markdown(
@@ -458,7 +459,8 @@ with gr.Blocks(
             input_image = gr.Image(type="numpy", label="Upload Screenshot")
             with gr.Accordion("Segmentation Parameters", open=True):
                 min_area_slider = gr.Slider(
-                    100, 10000, value=500, step=100, label="Min Component Area"
+                    100, 10000, value=500, step=100, label="Min Component Area",
+                    info="Minimum pixel area for a detected region to be considered valid. Increase to filter out noise."
                 )
                 max_area_slider = gr.Slider(
                     10000,
@@ -466,49 +468,63 @@ with gr.Blocks(
                     value=1_000_000,
                     step=10000,
                     label="Max Component Area",
+                    info="Maximum pixel area for a detected region. Decrease to ignore very large (background) regions."
                 )
                 merge_thresh_slider = gr.Slider(
-                    0, 100, value=20, step=1, label="Merge Distance Threshold"
+                    0, 100, value=20, step=1, label="Merge Distance Threshold",
+                    info="How close (in pixels) two components can be before being merged into one."
                 )
                 group_x_slider = gr.Slider(
-                    0, 200, value=40, step=1, label="Group X Threshold"
+                    0, 200, value=40, step=1, label="Group X Threshold",
+                    info="Horizontal distance for grouping/merging components in the same row."
                 )
                 group_y_slider = gr.Slider(
-                    0, 200, value=30, step=1, label="Group Y Threshold"
+                    0, 200, value=30, step=1, label="Group Y Threshold",
+                    info="Vertical distance for grouping/merging components in the same column."
                 )
                 table_ratio_slider = gr.Slider(
-                    1.0, 10.0, value=2.0, step=0.1, label="Table Aspect Ratio"
+                    1.0, 10.0, value=2.0, step=0.1, label="Table Aspect Ratio",
+                    info="Width-to-height ratio above which a component is classified as a table."
                 )
                 blur_kernel_slider = gr.Slider(
-                    1, 15, value=3, step=2, label="Gaussian Blur Kernel Size (odd)"
+                    1, 15, value=3, step=2, label="Gaussian Blur Kernel Size (odd)",
+                    info="Size of the Gaussian blur kernel (must be odd); helps reduce noise before thresholding."
                 )
                 block_size_slider = gr.Slider(
-                    3, 51, value=11, step=2, label="Adaptive Block Size (odd)"
+                    3, 51, value=11, step=2, label="Adaptive Block Size (odd)",
+                    info="Size of the local window for adaptive thresholding (must be odd). Smaller values detect finer details."
                 )
                 c_val_slider = gr.Slider(
-                    0, 20, value=2, step=1, label="Adaptive Threshold C"
+                    0, 20, value=2, step=1, label="Adaptive Threshold C",
+                    info="Constant subtracted from the mean/weighted mean in adaptive thresholding. Lower values are more sensitive."
                 )
                 adaptive_method_radio = gr.Radio(
                     ["mean", "gaussian"],
                     value="gaussian",
                     label="Adaptive Threshold Method",
+                    info="Method for adaptive thresholding: 'mean' or 'gaussian'."
                 )
                 morph_op_radio = gr.Radio(
                     ["dilate", "erode", "open", "close"],
                     value="close",
                     label="Morphological Operation",
+                    info="Type of morphological operation: dilate, erode, open, or close. 'Close' joins gaps, 'open' removes noise."
                 )
                 morph_kernel_slider = gr.Slider(
-                    1, 15, value=3, step=2, label="Morph Kernel Size (odd)"
+                    1, 15, value=3, step=2, label="Morph Kernel Size (odd)",
+                    info="Size of the structuring element for morphological operations (must be odd)."
                 )
                 morph_iter_slider = gr.Slider(
-                    1, 10, value=2, step=1, label="Morph Iterations"
+                    1, 10, value=2, step=1, label="Morph Iterations",
+                    info="Number of times the morphological operation is applied."
                 )
                 min_aspect_slider = gr.Slider(
-                    0.1, 2.0, value=0.2, step=0.05, label="Min Aspect Ratio"
+                    0.1, 2.0, value=0.2, step=0.05, label="Min Aspect Ratio",
+                    info="Minimum width/height ratio for a component to be considered valid."
                 )
                 max_aspect_slider = gr.Slider(
-                    2.0, 10.0, value=10.0, step=0.1, label="Max Aspect Ratio"
+                    2.0, 10.0, value=10.0, step=0.1, label="Max Aspect Ratio",
+                    info="Maximum width/height ratio for a component to be considered valid."
                 )
             status_text = gr.Textbox(label="Status", interactive=False)
             with gr.Row():
