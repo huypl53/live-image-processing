@@ -15,3 +15,5 @@ __pycache__/
 *.tsv
 *.jsonl
 *.jsonl.gz
+
+Session.vim

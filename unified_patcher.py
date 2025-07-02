@@ -4,11 +4,8 @@ import gradio as gr
 import json
 import tempfile
 import shutil
-import os
 from pathlib import Path
-from typing import List, Tuple, Dict, Any
-from dataclasses import dataclass
-from typing import TypedDict
+from typing import List, Tuple, Dict, Any, TypedDict
 
 
 class Box(TypedDict):
@@ -54,7 +51,7 @@ class UnifiedSegmenter:
             ([0, 0, 100], [180, 30, 200]),  # gray/white
         ]
         self.min_aspect_ratio = 0.2
-        self.max_aspect_ratio = 10.0
+        self.max_aspect_ratio = 30.0
 
     def preprocess(self, image: np.ndarray) -> Dict[str, np.ndarray]:
         steps = {}
@@ -214,33 +211,38 @@ class UnifiedSegmenter:
     def merge_boxes(
         self, boxes: List[Tuple[int, int, int, int]]
     ) -> List[Tuple[int, int, int, int]]:
-        # Merge using both single threshold and X/Y grouping
         if not boxes:
             return []
-        merged = []
-        for box in boxes:
-            x, y, w, h = box
-            found = False
-            for i, (mx, my, mw, mh) in enumerate(merged):
-                # Single merge threshold
-                if (
-                    abs(x - mx) < self.merge_threshold
-                    and abs(y - my) < self.merge_threshold
-                ):
-                    nx1, ny1 = min(x, mx), min(y, my)
-                    nx2, ny2 = max(x + w, mx + mw), max(y + h, my + mh)
-                    merged[i] = (nx1, ny1, nx2 - nx1, ny2 - ny1)
-                    found = True
-                    break
-                # X/Y grouping
-                if abs(x - mx) < self.group_x and abs(y - my) < self.group_y:
-                    nx1, ny1 = min(x, mx), min(y, my)
-                    nx2, ny2 = max(x + w, mx + mw), max(y + h, my + mh)
-                    merged[i] = (nx1, ny1, nx2 - nx1, ny2 - ny1)
-                    found = True
-                    break
-            if not found:
-                merged.append(box)
+        merged = [box for box in boxes]
+        changed = True
+        while changed:
+            changed = False
+            new_merged = []
+            skip = set()
+            for i, box1 in enumerate(merged):
+                if i in skip:
+                    continue
+                x1, y1, w1, h1 = box1
+                merged_this = False
+                for j, box2 in enumerate(merged):
+                    if i >= j or j in skip:
+                        continue
+                    x2, y2, w2, h2 = box2
+                    # Single merge threshold
+                    if (
+                        abs(x1 - x2) < self.merge_threshold
+                        and abs(y1 - y2) < self.merge_threshold
+                    ) or (abs(x1 - x2) < self.group_x and abs(y1 - y2) < self.group_y):
+                        nx1, ny1 = min(x1, x2), min(y1, y2)
+                        nx2, ny2 = max(x1 + w1, x2 + w2), max(y1 + h1, y2 + h2)
+                        new_merged.append((nx1, ny1, nx2 - nx1, ny2 - ny1))
+                        skip.add(j)
+                        merged_this = True
+                        changed = True
+                        break
+                if not merged_this:
+                    new_merged.append(box1)
+            merged = new_merged
         return merged
 
     def classify_component(
@@ -313,9 +315,10 @@ class UnifiedSegmenter:
         self, image: np.ndarray, components: List[BoxComponent]
     ) -> np.ndarray:
         vis = image.copy()
+        is_gray = len(vis.shape) == 2
         type_colors = {
             "table": (0, 255, 0),
-            "toolbar": (125, 0, 0),
+            "toolbar": (0, 125, 125),
             "form_panel": (0, 0, 255),
             "sidebar": (255, 255, 0),
             "input_group": (255, 0, 255),
@@ -324,7 +327,10 @@ class UnifiedSegmenter:
         for comp in components:
             bbox = comp["bbox"]
             x, y, w, h = bbox["x"], bbox["y"], bbox["width"], bbox["height"]
-            color = type_colors.get(comp["type"], (128, 128, 128))
+            if is_gray:
+                color = 255
+            else:
+                color = type_colors.get(comp["type"], (128, 128, 128))
             cv2.rectangle(vis, (x, y), (x + w, y + h), color, 2)
             label = f"{comp['id']}: {comp['type']}"
             label_size, _ = cv2.getTextSize(
@@ -621,8 +627,8 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                 )
                 max_aspect_slider = gr.Slider(
                     2.0,
-                    20.0,
-                    value=10.0,
+                    30.0,
+                    value=20.0,
                     step=0.1,
                     label="Max Aspect Ratio",
                     info="Maximum width/height ratio for a component to be considered valid.",
