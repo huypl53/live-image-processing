@@ -7,6 +7,28 @@ import shutil
 import os
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
+from dataclasses import dataclass
+from typing import TypedDict
+
+
+class Box(TypedDict):
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class BoxComponent(TypedDict):
+    id: int
+    type: str
+    bbox: Box
+    area: int
+
+
+class SegResult(TypedDict):
+    steps: Dict[str, np.ndarray]
+    components: List[BoxComponent]
+    total_components: int
 
 
 # --- Unified Segmenter Class ---
@@ -99,17 +121,25 @@ class UnifiedSegmenter:
             ),
         }
         morph = op_map[self.morph_op](
-            thresh, kernel, iterations=self.morph_iter
-        )
+            thresh, kernel, iterations=self.morph_iter)
         steps["morph"] = morph.copy()
         # Combine edges and morph
         combined = cv2.bitwise_or(morph, edges)
         steps["combined"] = combined.copy()
+
+        edge_boxes = self.detect_edge_boxes(steps["combined"])
+        edge_components = self.box2component(edge_boxes, steps["combined"])
+        vis_box_edge = self.draw_segmentation(
+            np.zeros_like(steps["combined"]), edge_components
+        )
+
+        steps["boxed_combined"] = vis_box_edge.copy()
+
         return steps
 
     def detect_color_regions(
         self, image: np.ndarray
-    ) -> Tuple[np.ndarray, List[Tuple[int, int, int, int]]]:
+    ) -> Tuple[Dict[str, np.ndarray], List[Tuple[int, int, int, int]]]:
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         mask_total = np.zeros(hsv.shape[:2], dtype=np.uint8)
         all_regions = []
@@ -137,23 +167,32 @@ class UnifiedSegmenter:
                     x, y, w, h = cv2.boundingRect(contour)
                     if w > 20 and h > 10:
                         all_regions.append((x, y, w, h))
-        return mask_total, all_regions
 
-    def find_components(
-        self,
-        combined: np.ndarray,
-        color_boxes: List[Tuple[int, int, int, int]],
-        image_shape,
-    ) -> List[Tuple[int, int, int, int]]:
+        steps = {}
+        color_components = self.box2component(all_regions, image)
+        vis_box_color = self.draw_segmentation(
+            np.zeros_like(image), color_components)
+
+        steps["color_mask"] = mask_total
+        steps["boxed_color"] = vis_box_color.copy()
+
+        return steps, all_regions
+
+    def detect_edge_boxes(self, im: np.ndarray) -> List[Tuple[int, int, int, int]]:
         contours, _ = cv2.findContours(
-            combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
+            im, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         edge_boxes = [
             cv2.boundingRect(c)
             for c in contours
             if cv2.contourArea(c) > self.min_component_area
         ]
-        all_boxes = edge_boxes + color_boxes
+        return edge_boxes
+
+    def find_components(
+        self,
+        all_boxes: List[Tuple[int, int, int, int]],
+        image_shape,
+    ) -> List[Tuple[int, int, int, int]]:
         # Filter by area and aspect ratio
         filtered = []
         for x, y, w, h in all_boxes:
@@ -175,40 +214,33 @@ class UnifiedSegmenter:
     def merge_boxes(
         self, boxes: List[Tuple[int, int, int, int]]
     ) -> List[Tuple[int, int, int, int]]:
+        # Merge using both single threshold and X/Y grouping
         if not boxes:
             return []
-        merged = [box for box in boxes]
-        changed = True
-        while changed:
-            changed = False
-            new_merged = []
-            skip = set()
-            for i, box1 in enumerate(merged):
-                if i in skip:
-                    continue
-                x1, y1, w1, h1 = box1
-                merged_this = False
-                for j, box2 in enumerate(merged):
-                    if i >= j or j in skip:
-                        continue
-                    x2, y2, w2, h2 = box2
-                    # Single merge threshold
-                    if (
-                        abs(x1 - x2) < self.merge_threshold
-                        and abs(y1 - y2) < self.merge_threshold
-                    ) or (
-                        abs(x1 - x2) < self.group_x and abs(y1 - y2) < self.group_y
-                    ):
-                        nx1, ny1 = min(x1, x2), min(y1, y2)
-                        nx2, ny2 = max(x1 + w1, x2 + w2), max(y1 + h1, y2 + h2)
-                        new_merged.append((nx1, ny1, nx2 - nx1, ny2 - ny1))
-                        skip.add(j)
-                        merged_this = True
-                        changed = True
-                        break
-                if not merged_this:
-                    new_merged.append(box1)
-            merged = new_merged
+        merged = []
+        for box in boxes:
+            x, y, w, h = box
+            found = False
+            for i, (mx, my, mw, mh) in enumerate(merged):
+                # Single merge threshold
+                if (
+                    abs(x - mx) < self.merge_threshold
+                    and abs(y - my) < self.merge_threshold
+                ):
+                    nx1, ny1 = min(x, mx), min(y, my)
+                    nx2, ny2 = max(x + w, mx + mw), max(y + h, my + mh)
+                    merged[i] = (nx1, ny1, nx2 - nx1, ny2 - ny1)
+                    found = True
+                    break
+                # X/Y grouping
+                if abs(x - mx) < self.group_x and abs(y - my) < self.group_y:
+                    nx1, ny1 = min(x, mx), min(y, my)
+                    nx2, ny2 = max(x + w, mx + mw), max(y + h, my + mh)
+                    merged[i] = (nx1, ny1, nx2 - nx1, ny2 - ny1)
+                    found = True
+                    break
+            if not found:
+                merged.append(box)
         return merged
 
     def classify_component(
@@ -229,7 +261,7 @@ class UnifiedSegmenter:
         else:
             return "component"
 
-    def segment(self, image: np.ndarray) -> Dict[str, Any]:
+    def segment(self, image: np.ndarray) -> SegResult:
         steps = {}
         steps_pre = self.preprocess(image)
         steps.update(steps_pre)
@@ -237,12 +269,28 @@ class UnifiedSegmenter:
             steps_pre["clahe"], steps_pre["adaptive_thresh"]
         )
         steps.update(steps_edge)
-        color_mask, color_boxes = self.detect_color_regions(image)
-        steps["color_mask"] = color_mask.copy()
-        boxes = self.find_components(
-            steps_edge["combined"], color_boxes, image.shape)
+        steps_color, color_boxes = self.detect_color_regions(image)
+        steps.update(steps_color)
+
+        edge_boxes = self.detect_edge_boxes(steps_edge["combined"])
+        all_boxes = edge_boxes + color_boxes
+        boxes = self.find_components(all_boxes, image.shape)
+
+        components = self.box2component(boxes, image)
+        components.sort(
+            key=lambda c: (-c["area"], c["bbox"]["y"], c["bbox"]["x"]))
+
+        return {
+            "steps": steps,
+            "components": components,
+            "total_components": len(components),
+        }
+
+    def box2component(
+        self, boxes: List[Tuple[int, int, int, int]], image: np.ndarray
+    ) -> List[BoxComponent]:
         # Compose metadata
-        components = []
+        components: List[BoxComponent] = []
         for i, box in enumerate(boxes):
             x, y, w, h = box
             comp_type = self.classify_component(box, image)
@@ -259,27 +307,21 @@ class UnifiedSegmenter:
                     "area": int(w * h),
                 }
             )
-        components.sort(
-            key=lambda c: (-c["area"], c["bbox"]["y"], c["bbox"]["x"]))
-        return {
-            "steps": steps,
-            "components": components,
-            "total_components": len(components),
-        }
+        return components
 
     def draw_segmentation(
-        self, image: np.ndarray, segmentation_result: Dict[str, Any]
+        self, image: np.ndarray, components: List[BoxComponent]
     ) -> np.ndarray:
         vis = image.copy()
         type_colors = {
             "table": (0, 255, 0),
-            "toolbar": (255, 0, 0),
+            "toolbar": (125, 0, 0),
             "form_panel": (0, 0, 255),
             "sidebar": (255, 255, 0),
             "input_group": (255, 0, 255),
             "component": (0, 255, 255),
         }
-        for comp in segmentation_result["components"]:
+        for comp in components:
             bbox = comp["bbox"]
             x, y, w, h = bbox["x"], bbox["y"], bbox["width"], bbox["height"]
             color = type_colors.get(comp["type"], (128, 128, 128))
@@ -372,27 +414,19 @@ def process_and_update(
 
         image_bgr = cv2.cvtColor(input_image_rgb, cv2.COLOR_RGB2BGR)
         seg_result = segmenter.segment(image_bgr)
-        vis_image_bgr = segmenter.draw_segmentation(image_bgr, seg_result)
+        vis_image_bgr = segmenter.draw_segmentation(
+            image_bgr, seg_result["components"])
         vis_image_rgb = cv2.cvtColor(vis_image_bgr, cv2.COLOR_BGR2RGB)
 
         # Intermediate steps
         steps = seg_result["steps"]
         step_imgs = []
-        for key in [
-            "clahe",
-            "blurred",
-            "adaptive_thresh",
-            "canny",
-            "morph",
-            "combined",
-            "color_mask",
-        ]:
-            if key in steps:
-                img = steps[key]
-                if len(img.shape) == 2:
-                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-                # step_imgs.append((f"{key}", img))
-                step_imgs.append((img, f"{key}"))
+        for key in steps:
+            img = steps[key]
+            if len(img.shape) == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            # step_imgs.append((f"{key}", img))
+            step_imgs.append((img, f"{key}"))
 
         # Save patches
         components = seg_result["components"]
@@ -578,7 +612,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                     info="Number of times the morphological operation is applied.",
                 )
                 min_aspect_slider = gr.Slider(
-                    0.1,
+                    0.05,
                     2.0,
                     value=0.2,
                     step=0.05,
@@ -587,7 +621,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                 )
                 max_aspect_slider = gr.Slider(
                     2.0,
-                    10.0,
+                    20.0,
                     value=10.0,
                     step=0.1,
                     label="Max Aspect Ratio",
@@ -769,7 +803,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                        inputs=all_inputs, outputs=all_outputs)
 
     # Register the cleanup function to run when the app session is closed (as a fallback)
-    demo.unload(cleanup_temp_dirs)
+    # demo.unload(cleanup_temp_dirs)
 
 if __name__ == "__main__":
     demo.launch()
