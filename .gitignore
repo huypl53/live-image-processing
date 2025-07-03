@@ -15,5 +15,6 @@ __pycache__/
 *.tsv
 *.jsonl
 *.jsonl.gz
+.venv/
 
 Session.vim
