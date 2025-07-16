@@ -2,6 +2,17 @@ import cv2
 import numpy as np
 from typing import Dict, List, Tuple, TypedDict
 
+# Use matplotlib's colormap for a diverse color palette (BGR)
+import matplotlib.pyplot as plt
+import numpy as np
+
+num_colors = 100
+cmap = plt.get_cmap("tab20", num_colors)
+palette = []
+for i in range(num_colors):
+    rgb = np.array(cmap(i)[:3]) * 255
+    bgr = tuple(int(x) for x in rgb[::-1])
+    palette.append(bgr)
 
 class Box(TypedDict):
     x: int
@@ -40,11 +51,28 @@ class UnifiedSegmenter:
         self.morph_op = "close"  # 'dilate', 'erode', 'open', 'close'
         self.morph_kernel = 3
         self.morph_iter = 2
+
+        # Edge detection options
+        self.use_canny = True
+        self.use_morph = True
+        self.canny_low = 50
+        self.canny_high = 150
+        self.canny_aperture = 3
+
+        # Color detection options
         self.color_ranges = [
             ([40, 50, 50], [80, 255, 255]),  # green
             ([100, 50, 50], [130, 255, 255]),  # blue
             ([0, 0, 100], [180, 30, 200]),  # gray/white
         ]
+        self.color_morph_kernel = 1
+        self.color_morph_iter = 1
+        self.use_color_close = True
+        self.use_color_open = True
+
+        # Box processing options
+        self.enable_merge = True
+
         self.min_aspect_ratio = 0.05
         self.max_aspect_ratio = 70.0
 
@@ -95,27 +123,35 @@ class UnifiedSegmenter:
         self, image: np.ndarray, thresh: np.ndarray
     ) -> Dict[str, np.ndarray]:
         steps = {}
-        # Canny Edges
-        edges = cv2.Canny(image, 50, 150, apertureSize=3)
-        steps["canny"] = edges.copy()
-        # Morphological Operation
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_RECT, (self.morph_kernel, self.morph_kernel)
-        )
-        op_map = {
-            "dilate": cv2.dilate,
-            "erode": cv2.erode,
-            "open": lambda img, k, iterations=1: cv2.morphologyEx(
-                img, cv2.MORPH_OPEN, k, iterations=iterations
-            ),
-            "close": lambda img, k, iterations=1: cv2.morphologyEx(
-                img, cv2.MORPH_CLOSE, k, iterations=iterations
-            ),
-        }
-        morph = op_map[self.morph_op](thresh, kernel, iterations=self.morph_iter)
-        steps["morph"] = morph.copy()
-        # Combine edges and morph
-        combined = cv2.bitwise_or(morph, edges)
+        combined = np.zeros_like(thresh)
+
+        # Canny Edges (optional)
+        if self.use_canny:
+            edges = cv2.Canny(
+                image, self.canny_low, self.canny_high, apertureSize=self.canny_aperture
+            )
+            steps["canny"] = edges.copy()
+            combined = cv2.bitwise_or(combined, edges)
+
+        # Morphological Operation (optional)
+        if self.use_morph:
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_RECT, (self.morph_kernel, self.morph_kernel)
+            )
+            op_map = {
+                "dilate": cv2.dilate,
+                "erode": cv2.erode,
+                "open": lambda img, k, iterations=1: cv2.morphologyEx(
+                    img, cv2.MORPH_OPEN, k, iterations=iterations
+                ),
+                "close": lambda img, k, iterations=1: cv2.morphologyEx(
+                    img, cv2.MORPH_CLOSE, k, iterations=iterations
+                ),
+            }
+            morph = op_map[self.morph_op](thresh, kernel, iterations=self.morph_iter)
+            steps["morph"] = morph.copy()
+            combined = cv2.bitwise_or(combined, morph)
+
         steps["combined"] = combined.copy()
 
         edge_boxes = self.detect_edge_boxes(steps["combined"])
@@ -134,20 +170,29 @@ class UnifiedSegmenter:
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         mask_total = np.zeros(hsv.shape[:2], dtype=np.uint8)
         all_regions = []
+
         for lower, upper in self.color_ranges:
             lower, upper = np.array(lower, dtype=np.uint8), np.array(
                 upper, dtype=np.uint8
             )
             mask = cv2.inRange(hsv, lower, upper)
-            kernel = cv2.getStructuringElement(
-                cv2.MORPH_RECT, (1, 1)
-            )
-            mask = cv2.morphologyEx(
-                mask, cv2.MORPH_CLOSE, kernel, iterations=1
-            )
-            mask = cv2.morphologyEx(
-                mask, cv2.MORPH_OPEN, kernel, iterations=1
-            )
+
+            # Apply morphological operations if enabled
+            if self.color_morph_kernel > 0:
+                kernel = cv2.getStructuringElement(
+                    cv2.MORPH_RECT, (self.color_morph_kernel, self.color_morph_kernel)
+                )
+
+                if self.use_color_close:
+                    mask = cv2.morphologyEx(
+                        mask, cv2.MORPH_CLOSE, kernel, iterations=self.color_morph_iter
+                    )
+
+                if self.use_color_open:
+                    mask = cv2.morphologyEx(
+                        mask, cv2.MORPH_OPEN, kernel, iterations=self.color_morph_iter
+                    )
+
             mask_total = cv2.bitwise_or(mask_total, mask)
             contours, _ = cv2.findContours(
                 mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -198,7 +243,12 @@ class UnifiedSegmenter:
                 and y + h <= image_shape[0]
             ):
                 filtered.append((x, y, w, h))
-        return self.merge_boxes(filtered)
+        
+        # Conditionally merge boxes
+        if self.enable_merge:
+            return self.merge_boxes(filtered)
+        else:
+            return filtered
 
     def merge_boxes(
         self, boxes: List[Tuple[int, int, int, int]]
@@ -286,11 +336,36 @@ class UnifiedSegmenter:
         steps.update(steps_color)
 
         edge_boxes = self.detect_edge_boxes(steps_edge["combined"])
-        all_boxes = edge_boxes + color_boxes
+        
+        # Add type prefixes to boxes
+        edge_boxes_with_type = [(x, y, w, h, "edge") for x, y, w, h in edge_boxes]
+        color_boxes_with_type = [(x, y, w, h, "color") for x, y, w, h in color_boxes]
+        
+        all_boxes_with_type = edge_boxes_with_type + color_boxes_with_type
+        
+        # Extract just the box coordinates for processing
+        all_boxes = [(x, y, w, h) for x, y, w, h, _ in all_boxes_with_type]
         boxes = self.find_components(all_boxes, image.shape)
+        
+        # Create a mapping from processed boxes back to their types
+        box_type_map = {}
+        for x, y, w, h, box_type in all_boxes_with_type:
+            box_type_map[(x, y, w, h)] = box_type
+        
+        # Reconstruct boxes with their types
+        final_boxes = []
+        for x, y, w, h in boxes:
+            # Find the original type for this box (or merged box)
+            box_type = "edge"  # default
+            for orig_x, orig_y, orig_w, orig_h, orig_type in all_boxes_with_type:
+                if (x <= orig_x and y <= orig_y and 
+                    x + w >= orig_x + orig_w and y + h >= orig_y + orig_h):
+                    box_type = orig_type
+                    break
+            final_boxes.append((x, y, w, h, box_type))
 
-        components = self.box2component(boxes, image)
-        components.sort(key=lambda c: (-c["area"], c["bbox"]["y"], c["bbox"]["x"]))
+        components = self.box2component_with_type(final_boxes, image)
+        components.sort(key=lambda c: (c["bbox"]["y"], c["bbox"]["x"], -c["area"]))
 
         return {
             "steps": steps,
@@ -321,34 +396,53 @@ class UnifiedSegmenter:
             )
         return components
 
+    def box2component_with_type(
+        self, boxes_with_type: List[Tuple[int, int, int, int, str]], image: np.ndarray
+    ) -> List[BoxComponent]:
+        # Compose metadata
+        components: List[BoxComponent] = []
+        for i, (x, y, w, h, box_type) in enumerate(boxes_with_type):
+            comp_type = self.classify_component((x, y, w, h), image)
+            # Add prefix to component type
+            prefixed_type = f"{box_type}_{comp_type}"
+            components.append(
+                {
+                    "id": i,
+                    "type": prefixed_type,
+                    "bbox": {
+                        "x": int(x),
+                        "y": int(y),
+                        "width": int(w),
+                        "height": int(h),
+                    },
+                    "area": int(w * h),
+                }
+            )
+        return components
+
     def draw_segmentation(
         self, image: np.ndarray, components: List[BoxComponent]
     ) -> np.ndarray:
+        import random
+
         vis = image.copy()
         is_gray = len(vis.shape) == 2
-        type_colors = {
-            "table": (0, 255, 0),
-            "toolbar": (0, 125, 125),
-            "form_panel": (0, 0, 255),
-            "sidebar": (255, 255, 0),
-            "input_group": (255, 0, 255),
-            "component": (0, 255, 255),
-        }
+
         for comp in components:
             bbox = comp["bbox"]
             x, y, w, h = bbox["x"], bbox["y"], bbox["width"], bbox["height"]
             if is_gray:
                 color = 255
             else:
-                color = type_colors.get(comp["type"], (128, 128, 128))
+                color = palette[comp["id"] % len(palette)]
             cv2.rectangle(vis, (x, y), (x + w, y + h), color, 2)
             label = f"{comp['id']}: {comp['type']}"
-            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
             label_y = y - 10 if y - 10 > 10 else y + 20
             cv2.rectangle(
                 vis,
-                (x, label_y - label_size[1] - 5),
-                (x + label_size[0] + 5, label_y + 5),
+                (x, label_y - label_size[1] - 2),
+                (x + label_size[0] + 2, label_y + 2),
                 color,
                 -1,
             )
@@ -357,9 +451,9 @@ class UnifiedSegmenter:
                 label,
                 (x + 2, label_y),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
+                0.4,
                 (0, 0, 0),
-                2,
+                1,
             )
         return vis
 

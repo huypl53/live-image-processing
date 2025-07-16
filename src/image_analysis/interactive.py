@@ -31,6 +31,19 @@ def process_and_update(
     morph_iter,
     min_aspect,
     max_aspect,
+    # Edge detection options
+    use_canny,
+    use_morph,
+    canny_low,
+    canny_high,
+    canny_aperture,
+    # Color detection options
+    color_morph_kernel,
+    color_morph_iter,
+    use_color_close,
+    use_color_open,
+    # Box processing options
+    enable_merge,
     previous_temp_dir,
 ):
     # Cleanup previous run's directory to prevent resource leaks
@@ -41,7 +54,6 @@ def process_and_update(
 
     if input_image_rgb is None:
         return (
-            None,
             None,
             None,
             None,
@@ -72,6 +84,22 @@ def process_and_update(
         segmenter.min_aspect_ratio = min_aspect
         segmenter.max_aspect_ratio = max_aspect
 
+        # Edge detection options
+        segmenter.use_canny = use_canny
+        segmenter.use_morph = use_morph
+        segmenter.canny_low = canny_low
+        segmenter.canny_high = canny_high
+        segmenter.canny_aperture = canny_aperture
+
+        # Color detection options
+        segmenter.color_morph_kernel = color_morph_kernel
+        segmenter.color_morph_iter = color_morph_iter
+        segmenter.use_color_close = use_color_close
+        segmenter.use_color_open = use_color_open
+
+        # Box processing options
+        segmenter.enable_merge = enable_merge
+
         image_bgr = cv2.cvtColor(input_image_rgb, cv2.COLOR_RGB2BGR)
         seg_result = segmenter.segment(image_bgr)
         vis_image_bgr = segmenter.draw_segmentation(
@@ -85,7 +113,6 @@ def process_and_update(
             img = steps[key]
             if len(img.shape) == 2:
                 img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-            # step_imgs.append((f"{key}", img))
             step_imgs.append((img, f"{key}"))
 
         # Save patches
@@ -124,7 +151,6 @@ def process_and_update(
             metadata,
             zip_path,
             step_imgs,
-            # step_gallery_imgs_labels,
             step_gallery_labels,
             status,
             str(run_temp_dir),
@@ -135,7 +161,6 @@ def process_and_update(
 
         traceback.print_exc()
         error_message = f"Status: An error occurred: {e}"
-        # Return 8 values to match the number of outputs
         return None, None, None, None, None, None, error_message, str(run_temp_dir)
 
 
@@ -287,6 +312,40 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                     label="Max Aspect Ratio",
                     info="Maximum width/height ratio for a component to be considered valid.",
                 )
+                # Add edge detection options
+                use_canny_checkbox = gr.Checkbox(
+                    value=True, label="Use Canny Edge Detection"
+                )
+                canny_low_slider = gr.Slider(
+                    0, 255, value=50, step=1, label="Canny Low Threshold"
+                )
+                canny_high_slider = gr.Slider(
+                    0, 255, value=150, step=1, label="Canny High Threshold"
+                )
+                canny_aperture_slider = gr.Slider(
+                    3, 7, value=3, step=2, label="Canny Aperture Size (odd)"
+                )
+                use_morph_checkbox = gr.Checkbox(
+                    value=True, label="Use Morphological Operation"
+                )
+                # Add color detection options
+                color_morph_kernel_slider = gr.Slider(
+                    1, 15, value=1, step=2, label="Color Morph Kernel Size (odd)"
+                )
+                color_morph_iter_slider = gr.Slider(
+                    1, 10, value=1, step=1, label="Color Morph Iterations"
+                )
+                use_color_close_checkbox = gr.Checkbox(
+                    value=True, label="Use Color Morph Close"
+                )
+                use_color_open_checkbox = gr.Checkbox(
+                    value=True, label="Use Color Morph Open"
+                )
+                # Add box processing options
+                enable_merge_checkbox = gr.Checkbox(
+                    value=True, label="Enable Box Merging",
+                    info="Enable merging of nearby boxes. Disable to keep all detected boxes separate."
+                )
             status_text = gr.Textbox(label="Status", interactive=False)
             with gr.Row():
                 submit_btn = gr.Button("Segment Image", variant="primary")
@@ -387,8 +446,21 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
         morph_iter_slider,
         min_aspect_slider,
         max_aspect_slider,
+        # Add new sliders
+        canny_low_slider,
+        canny_high_slider,
+        canny_aperture_slider,
+        color_morph_kernel_slider,
+        color_morph_iter_slider,
     ]
     all_radios = [adaptive_method_radio, morph_op_radio]
+    all_checkboxes = [
+        use_canny_checkbox,
+        use_morph_checkbox,
+        use_color_close_checkbox,
+        use_color_open_checkbox,
+        enable_merge_checkbox,
+    ]
 
     all_inputs = [
         input_image,
@@ -407,6 +479,16 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
         morph_iter_slider,
         min_aspect_slider,
         max_aspect_slider,
+        use_canny_checkbox,
+        use_morph_checkbox,
+        canny_low_slider,
+        canny_high_slider,
+        canny_aperture_slider,
+        color_morph_kernel_slider,
+        color_morph_iter_slider,
+        use_color_close_checkbox,
+        use_color_open_checkbox,
+        enable_merge_checkbox,
         previous_temp_dir_state,
     ]
     all_outputs = [
@@ -458,6 +540,11 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
     for radio in all_radios:
         radio.change(fn=process_and_update,
                      inputs=all_inputs, outputs=all_outputs)
+
+    # Add event handlers for checkboxes
+    for checkbox in all_checkboxes:
+        checkbox.change(fn=process_and_update,
+                       inputs=all_inputs, outputs=all_outputs)
 
     input_image.upload(fn=process_and_update,
                        inputs=all_inputs, outputs=all_outputs)
