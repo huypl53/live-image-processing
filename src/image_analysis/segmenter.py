@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 from typing import Dict, List, Tuple, TypedDict
 
+
 class Box(TypedDict):
     x: int
     y: int
@@ -21,11 +22,12 @@ class SegResult(TypedDict):
     components: List[BoxComponent]
     total_components: int
 
+
 # --- Unified Segmenter Class ---
 class UnifiedSegmenter:
     def __init__(self):
         # Default parameters
-        self.min_component_area = 500
+        self.min_component_area = 100
         self.max_component_area = 1_000_000
         self.merge_threshold = 20
         self.group_x = 40
@@ -43,8 +45,8 @@ class UnifiedSegmenter:
             ([100, 50, 50], [130, 255, 255]),  # blue
             ([0, 0, 100], [180, 30, 200]),  # gray/white
         ]
-        self.min_aspect_ratio = 0.2
-        self.max_aspect_ratio = 30.0
+        self.min_aspect_ratio = 0.05
+        self.max_aspect_ratio = 70.0
 
     def preprocess(self, image: np.ndarray) -> Dict[str, np.ndarray]:
         steps = {}
@@ -110,8 +112,7 @@ class UnifiedSegmenter:
                 img, cv2.MORPH_CLOSE, k, iterations=iterations
             ),
         }
-        morph = op_map[self.morph_op](
-            thresh, kernel, iterations=self.morph_iter)
+        morph = op_map[self.morph_op](thresh, kernel, iterations=self.morph_iter)
         steps["morph"] = morph.copy()
         # Combine edges and morph
         combined = cv2.bitwise_or(morph, edges)
@@ -139,13 +140,13 @@ class UnifiedSegmenter:
             )
             mask = cv2.inRange(hsv, lower, upper)
             kernel = cv2.getStructuringElement(
-                cv2.MORPH_RECT, (self.morph_kernel, self.morph_kernel)
+                cv2.MORPH_RECT, (1, 1)
             )
             mask = cv2.morphologyEx(
-                mask, cv2.MORPH_CLOSE, kernel, iterations=self.morph_iter
+                mask, cv2.MORPH_CLOSE, kernel, iterations=1
             )
             mask = cv2.morphologyEx(
-                mask, cv2.MORPH_OPEN, kernel, iterations=self.morph_iter
+                mask, cv2.MORPH_OPEN, kernel, iterations=1
             )
             mask_total = cv2.bitwise_or(mask_total, mask)
             contours, _ = cv2.findContours(
@@ -160,8 +161,7 @@ class UnifiedSegmenter:
 
         steps = {}
         color_components = self.box2component(all_regions, image)
-        vis_box_color = self.draw_segmentation(
-            np.zeros_like(image), color_components)
+        vis_box_color = self.draw_segmentation(np.zeros_like(image), color_components)
 
         steps["color_mask"] = mask_total
         steps["boxed_color"] = vis_box_color.copy()
@@ -169,8 +169,7 @@ class UnifiedSegmenter:
         return steps, all_regions
 
     def detect_edge_boxes(self, im: np.ndarray) -> List[Tuple[int, int, int, int]]:
-        contours, _ = cv2.findContours(
-            im, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(im, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         edge_boxes = [
             cv2.boundingRect(c)
             for c in contours
@@ -222,16 +221,29 @@ class UnifiedSegmenter:
                         continue
                     x2, y2, w2, h2 = box2
                     # Check if one box is inside the other
-                    box1_inside_box2 = (x1 >= x2 and y1 >= y2 and 
-                                       x1 + w1 <= x2 + w2 and y1 + h1 <= y2 + h2)
-                    box2_inside_box1 = (x2 >= x1 and y2 >= y1 and 
-                                       x2 + w2 <= x1 + w1 and y2 + h2 <= y1 + h1)
-                    
+                    box1_inside_box2 = (
+                        x1 >= x2
+                        and y1 >= y2
+                        and x1 + w1 <= x2 + w2
+                        and y1 + h1 <= y2 + h2
+                    )
+                    box2_inside_box1 = (
+                        x2 >= x1
+                        and y2 >= y1
+                        and x2 + w2 <= x1 + w1
+                        and y2 + h2 <= y1 + h1
+                    )
+
                     # Single merge threshold or one box inside another
                     if (
-                        abs(x1 - x2) < self.merge_threshold
-                        and abs(y1 - y2) < self.merge_threshold
-                    ) or (abs(x1 - x2) < self.group_x and abs(y1 - y2) < self.group_y) or box1_inside_box2 or box2_inside_box1:
+                        (
+                            abs(x1 - x2) < self.merge_threshold
+                            and abs(y1 - y2) < self.merge_threshold
+                        )
+                        or (abs(x1 - x2) < self.group_x and abs(y1 - y2) < self.group_y)
+                        or box1_inside_box2
+                        or box2_inside_box1
+                    ):
                         nx1, ny1 = min(x1, x2), min(y1, y2)
                         nx2, ny2 = max(x1 + w1, x2 + w2), max(y1 + h1, y2 + h2)
                         new_merged.append((nx1, ny1, nx2 - nx1, ny2 - ny1))
@@ -278,8 +290,7 @@ class UnifiedSegmenter:
         boxes = self.find_components(all_boxes, image.shape)
 
         components = self.box2component(boxes, image)
-        components.sort(
-            key=lambda c: (-c["area"], c["bbox"]["y"], c["bbox"]["x"]))
+        components.sort(key=lambda c: (-c["area"], c["bbox"]["y"], c["bbox"]["x"]))
 
         return {
             "steps": steps,
@@ -332,8 +343,7 @@ class UnifiedSegmenter:
                 color = type_colors.get(comp["type"], (128, 128, 128))
             cv2.rectangle(vis, (x, y), (x + w, y + h), color, 2)
             label = f"{comp['id']}: {comp['type']}"
-            label_size, _ = cv2.getTextSize(
-                label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
             label_y = y - 10 if y - 10 > 10 else y + 20
             cv2.rectangle(
                 vis,
@@ -352,16 +362,16 @@ class UnifiedSegmenter:
                 2,
             )
         return vis
-    
-    
+
+
 if __name__ == "__main__":
     import sys
+
     image_path = sys.argv[1]
     segmenter = UnifiedSegmenter()
-    input_image_rgb = cv2.imread(image_path)    
+    input_image_rgb = cv2.imread(image_path)
     image_bgr = cv2.cvtColor(input_image_rgb, cv2.COLOR_RGB2BGR)
     seg_result = segmenter.segment(image_bgr)
-    vis_image_bgr = segmenter.draw_segmentation(
-        image_bgr, seg_result["components"])
+    vis_image_bgr = segmenter.draw_segmentation(image_bgr, seg_result["components"])
     vis_image_rgb = cv2.cvtColor(vis_image_bgr, cv2.COLOR_BGR2RGB)
     cv2.imwrite("test_vis.png", vis_image_rgb)

@@ -6,7 +6,7 @@ import tempfile
 import cv2
 import gradio as gr
 
-from segmenter import UnifiedSegmenter
+from image_analysis.segmenter import UnifiedSegmenter
 
 
 # --- Gradio UI ---
@@ -174,7 +174,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                 min_area_slider = gr.Slider(
                     100,
                     10000,
-                    value=500,
+                    value=100,
                     step=100,
                     label="Min Component Area",
                     info="Minimum pixel area for a detected region to be considered valid. Increase to filter out noise.",
@@ -274,15 +274,15 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                 min_aspect_slider = gr.Slider(
                     0.05,
                     2.0,
-                    value=0.2,
+                    value=0.05,
                     step=0.05,
                     label="Min Aspect Ratio",
                     info="Minimum width/height ratio for a component to be considered valid.",
                 )
                 max_aspect_slider = gr.Slider(
                     2.0,
-                    50.0,
-                    value=20.0,
+                    100.0,
+                    value=70.0,
                     step=0.1,
                     label="Max Aspect Ratio",
                     info="Maximum width/height ratio for a component to be considered valid.",
