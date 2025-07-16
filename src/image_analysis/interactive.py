@@ -6,7 +6,7 @@ import tempfile
 import cv2
 import gradio as gr
 
-from segmenter import UnifiedSegmenter
+from image_analysis.segmenter import UnifiedSegmenter
 
 
 # --- Gradio UI ---
