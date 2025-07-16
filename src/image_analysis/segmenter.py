@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from typing import Dict, List, Tuple, TypedDict
+from typing import Dict, List, Literal, Tuple, TypedDict
 
 # Use matplotlib's colormap for a diverse color palette (BGR)
 import matplotlib.pyplot as plt
@@ -13,6 +13,7 @@ for i in range(num_colors):
     rgb = np.array(cmap(i)[:3]) * 255
     bgr = tuple(int(x) for x in rgb[::-1])
     palette.append(bgr)
+
 
 class Box(TypedDict):
     x: int
@@ -50,7 +51,7 @@ class UnifiedSegmenter:
         self.adaptive_method = "gaussian"  # 'mean' or 'gaussian'
         self.morph_op = "close"  # 'dilate', 'erode', 'open', 'close'
         self.morph_kernel = 3
-        self.morph_iter = 2
+        self.morph_iter = 1
 
         # Edge detection options
         self.use_canny = True
@@ -72,6 +73,7 @@ class UnifiedSegmenter:
 
         # Box processing options
         self.enable_merge = True
+        self.iou_threshold = 0.9  # IoU threshold for keep_detail strategy
 
         self.min_aspect_ratio = 0.05
         self.max_aspect_ratio = 70.0
@@ -243,16 +245,56 @@ class UnifiedSegmenter:
                 and y + h <= image_shape[0]
             ):
                 filtered.append((x, y, w, h))
-        
+
         # Conditionally merge boxes
         if self.enable_merge:
             return self.merge_boxes(filtered)
         else:
             return filtered
 
-    def merge_boxes(
+    def calculate_iou(
+        self, box1: Tuple[int, int, int, int], box2: Tuple[int, int, int, int]
+    ) -> float:
+        """Calculate Intersection over Union between two boxes."""
+        x1, y1, w1, h1 = box1
+        x2, y2, w2, h2 = box2
+
+        # Calculate intersection coordinates
+        x_left = max(x1, x2)
+        y_top = max(y1, y2)
+        x_right = min(x1 + w1, x2 + w2)
+        y_bottom = min(y1 + h1, y2 + h2)
+
+        if x_right < x_left or y_bottom < y_top:
+            return 0.0  # No intersection
+
+        intersection_area = (x_right - x_left) * (y_bottom - y_top)
+        box1_area = w1 * h1
+        box2_area = w2 * h2
+        union_area = box1_area + box2_area - intersection_area
+
+        return intersection_area / union_area if union_area > 0 else 0.0
+
+    def is_smaller_box_inside_bigger(
+        self,
+        smaller_box: Tuple[int, int, int, int],
+        bigger_box: Tuple[int, int, int, int],
+    ) -> bool:
+        """Check if smaller box is nearly inside bigger box using IoU."""
+        x1, y1, w1, h1 = smaller_box
+        x2, y2, w2, h2 = bigger_box
+
+        # Calculate IoU
+        iou = self.calculate_iou(smaller_box, bigger_box)
+
+        # Check if smaller box is nearly inside bigger box
+        # IoU should be high (close to 1) when smaller box is inside bigger box
+        return iou >= self.iou_threshold
+
+    def merge_boxes_ignore_detail(
         self, boxes: List[Tuple[int, int, int, int]]
     ) -> List[Tuple[int, int, int, int]]:
+        """Original merge strategy - ignore detail."""
         if not boxes:
             return []
         merged = [box for box in boxes]
@@ -306,6 +348,100 @@ class UnifiedSegmenter:
             merged = new_merged
         return merged
 
+    def merge_boxes_keep_detail(
+        self, boxes: List[Tuple[int, int, int, int]]
+    ) -> List[Tuple[int, int, int, int]]:
+        """Keep detail strategy - preserve small boxes that would be merged."""
+        if not boxes:
+            return []
+
+        # Step 1: Merge boxes using IoU-based approach
+        merged = [box for box in boxes]
+        changed = True
+        while changed:
+            changed = False
+            new_merged = []
+            skip = set()
+            for i, box1 in enumerate(merged):
+                if i in skip:
+                    continue
+                x1, y1, w1, h1 = box1
+                merged_this = False
+                for j, box2 in enumerate(merged):
+                    if i >= j or j in skip:
+                        continue
+                    x2, y2, w2, h2 = box2
+
+                    # Determine which box is smaller and which is bigger
+                    area1 = w1 * h1
+                    area2 = w2 * h2
+
+                    if area1 <= area2:
+                        smaller_box = box1
+                        bigger_box = box2
+                    else:
+                        smaller_box = box2
+                        bigger_box = box1
+
+                    # Check if smaller box is nearly inside bigger box
+                    if self.is_smaller_box_inside_bigger(smaller_box, bigger_box):
+                        # Merge them
+                        nx1, ny1 = min(x1, x2), min(y1, y2)
+                        nx2, ny2 = max(x1 + w1, x2 + w2), max(y1 + h1, y2 + h2)
+                        new_merged.append((nx1, ny1, nx2 - nx1, ny2 - ny1))
+                        skip.add(j)
+                        merged_this = True
+                        changed = True
+                        break
+                if not merged_this:
+                    new_merged.append(box1)
+            merged = new_merged
+
+        # Step 2: Process merged boxes and handle "too-big" boxes
+        final_boxes = []
+        for merged_box in merged:
+            mx, my, mw, mh = merged_box
+            merged_area = mw * mh
+
+            # Find all smaller original boxes that this merged box covers
+            covered_smaller_boxes = []
+            for orig_box in boxes:
+                ox, oy, ow, oh = orig_box
+                orig_area = ow * oh
+
+                # Skip if original box is larger than merged box
+                if orig_area >= merged_area:
+                    continue
+
+                # Check if merged box covers this smaller original box using IoU
+                iou = self.calculate_iou(merged_box, orig_box)
+                if iou >= self.iou_threshold:
+                    # This merged box covers a smaller original box
+                    covered_smaller_boxes.append(orig_box)
+
+            # If this merged box covers several smaller boxes, keep the smaller ones
+            if len(covered_smaller_boxes) > 1:
+                # Add all the smaller boxes to final result
+                final_boxes.extend(covered_smaller_boxes)
+            else:
+                # Keep the merged box if it doesn't cover multiple smaller boxes
+                final_boxes.append(merged_box)
+
+        return final_boxes
+
+    def merge_boxes(
+        self,
+        boxes: List[Tuple[int, int, int, int]],
+        strategy: Literal["ignore_detail", "keep_detail"] = "ignore_detail",
+    ) -> List[Tuple[int, int, int, int]]:
+        """Merge boxes using specified strategy."""
+        if strategy == "ignore_detail":
+            return self.merge_boxes_ignore_detail(boxes)
+        elif strategy == "keep_detail":
+            return self.merge_boxes_keep_detail(boxes)
+        else:
+            raise ValueError(f"Unknown merge strategy: {strategy}")
+
     def classify_component(
         self, box: Tuple[int, int, int, int], image: np.ndarray
     ) -> str:
@@ -336,30 +472,37 @@ class UnifiedSegmenter:
         steps.update(steps_color)
 
         edge_boxes = self.detect_edge_boxes(steps_edge["combined"])
-        
+
+        edge_boxes = self.merge_boxes(edge_boxes, strategy="keep_detail")
+        color_boxes = self.merge_boxes(color_boxes, strategy="ignore_detail")
+
         # Add type prefixes to boxes
         edge_boxes_with_type = [(x, y, w, h, "edge") for x, y, w, h in edge_boxes]
         color_boxes_with_type = [(x, y, w, h, "color") for x, y, w, h in color_boxes]
-        
+
         all_boxes_with_type = edge_boxes_with_type + color_boxes_with_type
-        
+
         # Extract just the box coordinates for processing
         all_boxes = [(x, y, w, h) for x, y, w, h, _ in all_boxes_with_type]
         boxes = self.find_components(all_boxes, image.shape)
-        
-        # Create a mapping from processed boxes back to their types
-        box_type_map = {}
-        for x, y, w, h, box_type in all_boxes_with_type:
-            box_type_map[(x, y, w, h)] = box_type
-        
+
+        # # Create a mapping from processed boxes back to their types
+        # box_type_map = {}
+        # for x, y, w, h, box_type in all_boxes_with_type:
+        #     box_type_map[(x, y, w, h)] = box_type
+
         # Reconstruct boxes with their types
         final_boxes = []
         for x, y, w, h in boxes:
             # Find the original type for this box (or merged box)
             box_type = "edge"  # default
             for orig_x, orig_y, orig_w, orig_h, orig_type in all_boxes_with_type:
-                if (x <= orig_x and y <= orig_y and 
-                    x + w >= orig_x + orig_w and y + h >= orig_y + orig_h):
+                if (
+                    x <= orig_x
+                    and y <= orig_y
+                    and x + w >= orig_x + orig_w
+                    and y + h >= orig_y + orig_h
+                ):
                     box_type = orig_type
                     break
             final_boxes.append((x, y, w, h, box_type))

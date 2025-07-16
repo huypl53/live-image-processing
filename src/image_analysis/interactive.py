@@ -291,7 +291,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                 morph_iter_slider = gr.Slider(
                     1,
                     10,
-                    value=2,
+                    value=1,
                     step=1,
                     label="Morph Iterations",
                     info="Number of times the morphological operation is applied.",
