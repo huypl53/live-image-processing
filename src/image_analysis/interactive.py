@@ -44,6 +44,7 @@ def process_and_update(
     use_color_open,
     # Box processing options
     enable_merge,
+    merge_strategy,
     previous_temp_dir,
 ):
     # Cleanup previous run's directory to prevent resource leaks
@@ -99,6 +100,7 @@ def process_and_update(
 
         # Box processing options
         segmenter.enable_merge = enable_merge
+        segmenter.merge_strategy = merge_strategy
 
         image_bgr = cv2.cvtColor(input_image_rgb, cv2.COLOR_RGB2BGR)
         seg_result = segmenter.segment(image_bgr)
@@ -274,6 +276,10 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                     label="Adaptive Threshold Method",
                     info="Method for adaptive thresholding: 'mean' or 'gaussian'.",
                 )
+
+                use_morph_checkbox = gr.Checkbox(
+                    value=True, label="Use Morphological Operation"
+                )
                 morph_op_radio = gr.Radio(
                     ["dilate", "erode", "open", "close"],
                     value="close",
@@ -325,9 +331,6 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                 canny_aperture_slider = gr.Slider(
                     3, 7, value=3, step=2, label="Canny Aperture Size (odd)"
                 )
-                use_morph_checkbox = gr.Checkbox(
-                    value=True, label="Use Morphological Operation"
-                )
                 # Add color detection options
                 color_morph_kernel_slider = gr.Slider(
                     1, 15, value=1, step=2, label="Color Morph Kernel Size (odd)"
@@ -345,6 +348,12 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                 enable_merge_checkbox = gr.Checkbox(
                     value=True, label="Enable Box Merging",
                     info="Enable merging of nearby boxes. Disable to keep all detected boxes separate."
+                )
+                merge_strategy_radio = gr.Radio(
+                    ["ignore_detail", "keep_detail"],
+                    value="ignore_detail",
+                    label="Merge Strategy",
+                    info="Strategy for merging boxes: 'ignore_detail' merges boxes based on their bounding box, 'keep_detail' merges boxes based on their detail.",
                 )
             status_text = gr.Textbox(label="Status", interactive=False)
             with gr.Row():
@@ -453,7 +462,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
         color_morph_kernel_slider,
         color_morph_iter_slider,
     ]
-    all_radios = [adaptive_method_radio, morph_op_radio]
+    all_radios = [adaptive_method_radio, morph_op_radio, merge_strategy_radio]
     all_checkboxes = [
         use_canny_checkbox,
         use_morph_checkbox,
@@ -489,6 +498,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
         use_color_close_checkbox,
         use_color_open_checkbox,
         enable_merge_checkbox,
+        merge_strategy_radio,
         previous_temp_dir_state,
     ]
     all_outputs = [

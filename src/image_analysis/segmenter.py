@@ -6,7 +6,7 @@ from typing import Dict, List, Literal, Tuple, TypedDict
 import matplotlib.pyplot as plt
 import numpy as np
 
-num_colors = 100
+num_colors = 64
 cmap = plt.get_cmap("tab20", num_colors)
 palette = []
 for i in range(num_colors):
@@ -41,9 +41,9 @@ class UnifiedSegmenter:
         # Default parameters
         self.min_component_area = 100
         self.max_component_area = 1_000_000
-        self.merge_threshold = 20
-        self.group_x = 40
-        self.group_y = 30
+        self.merge_threshold = 10
+        self.group_x = 20
+        self.group_y = 15
         self.table_aspect_ratio_threshold = 2.0
         self.blur_kernel = 3
         self.adaptive_block_size = 11
@@ -51,7 +51,7 @@ class UnifiedSegmenter:
         self.adaptive_method = "gaussian"  # 'mean' or 'gaussian'
         self.morph_op = "close"  # 'dilate', 'erode', 'open', 'close'
         self.morph_kernel = 3
-        self.morph_iter = 1
+        self.morph_iter = 2
 
         # Edge detection options
         self.use_canny = True
@@ -77,6 +77,9 @@ class UnifiedSegmenter:
 
         self.min_aspect_ratio = 0.05
         self.max_aspect_ratio = 70.0
+
+        self.merge_strategy: Literal["ignore_detail", "keep_detail"] | None = None
+        self.nms_iou_threshold = 0.8  # High threshold for NMS after keep-detail merging
 
     def preprocess(self, image: np.ndarray) -> Dict[str, np.ndarray]:
         steps = {}
@@ -138,7 +141,7 @@ class UnifiedSegmenter:
         # Morphological Operation (optional)
         if self.use_morph:
             kernel = cv2.getStructuringElement(
-                cv2.MORPH_RECT, (self.morph_kernel, self.morph_kernel)
+                cv2.MORPH_RECT, (self.morph_kernel, 1)
             )
             op_map = {
                 "dilate": cv2.dilate,
@@ -252,10 +255,10 @@ class UnifiedSegmenter:
         else:
             return filtered
 
-    def calculate_iou(
+    def calculate_iosa(
         self, box1: Tuple[int, int, int, int], box2: Tuple[int, int, int, int]
     ) -> float:
-        """Calculate Intersection over Union between two boxes."""
+        """Calculate Intersection over Smaller Area between two boxes."""
         x1, y1, w1, h1 = box1
         x2, y2, w2, h2 = box2
 
@@ -271,25 +274,98 @@ class UnifiedSegmenter:
         intersection_area = (x_right - x_left) * (y_bottom - y_top)
         box1_area = w1 * h1
         box2_area = w2 * h2
-        union_area = box1_area + box2_area - intersection_area
+        smaller_area = min(box1_area, box2_area)
 
-        return intersection_area / union_area if union_area > 0 else 0.0
+        return intersection_area / smaller_area if smaller_area > 0 else 0.0
 
     def is_smaller_box_inside_bigger(
         self,
         smaller_box: Tuple[int, int, int, int],
         bigger_box: Tuple[int, int, int, int],
     ) -> bool:
-        """Check if smaller box is nearly inside bigger box using IoU."""
-        x1, y1, w1, h1 = smaller_box
-        x2, y2, w2, h2 = bigger_box
+        """Check if smaller box is nearly inside bigger box using IoSA."""
+        # Calculate IoSA (Intersection over Smaller Area)
+        iosa = self.calculate_iosa(smaller_box, bigger_box)
+        
+        # IoSA threshold for containment detection
+        return iosa >= self.iou_threshold  # You might want to rename this parameter
 
-        # Calculate IoU
-        iou = self.calculate_iou(smaller_box, bigger_box)
-
-        # Check if smaller box is nearly inside bigger box
-        # IoU should be high (close to 1) when smaller box is inside bigger box
-        return iou >= self.iou_threshold
+    def non_maximum_suppression(
+        self, 
+        boxes: List[Tuple[int, int, int, int]], 
+        iou_threshold: float = 0.8
+    ) -> List[Tuple[int, int, int, int]]:
+        """
+        Apply Non-Maximum Suppression to remove nearly identical overlapping boxes.
+        
+        Args:
+            boxes: List of boxes in (x, y, w, h) format
+            iou_threshold: High threshold for NMS since boxes should be nearly identical
+        """
+        if not boxes:
+            return []
+        
+        # Convert to (x1, y1, x2, y2) format for easier processing
+        boxes_xyxy = []
+        for x, y, w, h in boxes:
+            boxes_xyxy.append((x, y, x + w, y + h))
+        
+        # Sort by area (largest first) - keep larger boxes
+        areas = [(i, (x2 - x1) * (y2 - y1)) for i, (x1, y1, x2, y2) in enumerate(boxes_xyxy)]
+        areas.sort(key=lambda x: x[1], reverse=True)
+        
+        kept_indices = []
+        
+        for idx, _ in areas:
+            should_keep = True
+            
+            # Check against already kept boxes
+            for kept_idx in kept_indices:
+                kept_box = boxes_xyxy[kept_idx]
+                current_box = boxes_xyxy[idx]
+                
+                # Calculate IoU between current box and kept box
+                iou = self._calculate_iou_xyxy(current_box, kept_box)
+                
+                if iou >= iou_threshold:
+                    should_keep = False
+                    break
+            
+            if should_keep:
+                kept_indices.append(idx)
+        
+        # Convert back to (x, y, w, h) format
+        result = []
+        for idx in kept_indices:
+            x1, y1, x2, y2 = boxes_xyxy[idx]
+            result.append((x1, y1, x2 - x1, y2 - y1))
+        
+        return result
+    
+    def _calculate_iou_xyxy(
+        self, 
+        box1: Tuple[int, int, int, int], 
+        box2: Tuple[int, int, int, int]
+    ) -> float:
+        """Calculate IoU between boxes in (x1, y1, x2, y2) format."""
+        x1_1, y1_1, x2_1, y2_1 = box1
+        x1_2, y1_2, x2_2, y2_2 = box2
+        
+        # Calculate intersection
+        x_left = max(x1_1, x1_2)
+        y_top = max(y1_1, y1_2)
+        x_right = min(x2_1, x2_2)
+        y_bottom = min(y2_1, y2_2)
+        
+        if x_right < x_left or y_bottom < y_top:
+            return 0.0
+        
+        intersection_area = (x_right - x_left) * (y_bottom - y_top)
+        box1_area = (x2_1 - x1_1) * (y2_1 - y1_1)
+        box2_area = (x2_2 - x1_2) * (y2_2 - y1_2)
+        union_area = box1_area + box2_area - intersection_area
+        
+        return intersection_area / union_area if union_area > 0 else 0.0
 
     def merge_boxes_ignore_detail(
         self, boxes: List[Tuple[int, int, int, int]]
@@ -325,6 +401,8 @@ class UnifiedSegmenter:
                         and x2 + w2 <= x1 + w1
                         and y2 + h2 <= y1 + h1
                     )
+                    
+                    iosa = self.calculate_iosa(box1, box2)
 
                     # Single merge threshold or one box inside another
                     if (
@@ -335,6 +413,7 @@ class UnifiedSegmenter:
                         or (abs(x1 - x2) < self.group_x and abs(y1 - y2) < self.group_y)
                         or box1_inside_box2
                         or box2_inside_box1
+                        or iosa >= self.iou_threshold
                     ):
                         nx1, ny1 = min(x1, x2), min(y1, y2)
                         nx2, ny2 = max(x1 + w1, x2 + w2), max(y1 + h1, y2 + h2)
@@ -355,86 +434,62 @@ class UnifiedSegmenter:
         if not boxes:
             return []
 
-        # Step 1: Merge boxes using IoU-based approach
-        merged = [box for box in boxes]
-        changed = True
-        while changed:
-            changed = False
-            new_merged = []
-            skip = set()
-            for i, box1 in enumerate(merged):
-                if i in skip:
-                    continue
-                x1, y1, w1, h1 = box1
-                merged_this = False
-                for j, box2 in enumerate(merged):
-                    if i >= j or j in skip:
-                        continue
-                    x2, y2, w2, h2 = box2
-
-                    # Determine which box is smaller and which is bigger
-                    area1 = w1 * h1
-                    area2 = w2 * h2
-
-                    if area1 <= area2:
-                        smaller_box = box1
-                        bigger_box = box2
-                    else:
-                        smaller_box = box2
-                        bigger_box = box1
-
-                    # Check if smaller box is nearly inside bigger box
-                    if self.is_smaller_box_inside_bigger(smaller_box, bigger_box):
-                        # Merge them
-                        nx1, ny1 = min(x1, x2), min(y1, y2)
-                        nx2, ny2 = max(x1 + w1, x2 + w2), max(y1 + h1, y2 + h2)
-                        new_merged.append((nx1, ny1, nx2 - nx1, ny2 - ny1))
-                        skip.add(j)
-                        merged_this = True
-                        changed = True
-                        break
-                if not merged_this:
-                    new_merged.append(box1)
-            merged = new_merged
-
-        # Step 2: Process merged boxes and handle "too-big" boxes
+        # Sort boxes by area (smallest first) for easier processing
+        sorted_boxes = sorted(boxes, key=lambda box: box[2] * box[3])
+        
         final_boxes = []
-        for merged_box in merged:
-            mx, my, mw, mh = merged_box
-            merged_area = mw * mh
-
-            # Find all smaller original boxes that this merged box covers
-            covered_smaller_boxes = []
-            for orig_box in boxes:
-                ox, oy, ow, oh = orig_box
-                orig_area = ow * oh
-
-                # Skip if original box is larger than merged box
-                if orig_area >= merged_area:
+        boxes_to_skip = set()
+        
+        # Iterate through all boxes
+        for i, current_box in enumerate(sorted_boxes):
+            if i in boxes_to_skip:
+                continue
+                
+            current_area = current_box[2] * current_box[3]
+            contained_small_boxes = []
+            
+            # Check if this box contains any smaller boxes
+            for j, other_box in enumerate(sorted_boxes):
+                if i == j or j in boxes_to_skip:
                     continue
-
-                # Check if merged box covers this smaller original box using IoU
-                iou = self.calculate_iou(merged_box, orig_box)
-                if iou >= self.iou_threshold:
-                    # This merged box covers a smaller original box
-                    covered_smaller_boxes.append(orig_box)
-
-            # If this merged box covers several smaller boxes, keep the smaller ones
-            if len(covered_smaller_boxes) > 1:
-                # Add all the smaller boxes to final result
-                final_boxes.extend(covered_smaller_boxes)
+                    
+                other_area = other_box[2] * other_box[3]
+                
+                # Only consider boxes that are smaller than current box
+                if other_area >= current_area:
+                    continue
+                
+                # Check if smaller box is contained in current box using IoSA
+                iosa = self.calculate_iosa(current_box, other_box)
+                if iosa >= self.iou_threshold:
+                    contained_small_boxes.append(other_box)
+                    boxes_to_skip.add(j)
+            
+            # Decision logic:
+            # - If current box contains multiple small boxes, keep the small ones
+            # - If current box contains only one or no small boxes, keep the current box
+            if len(contained_small_boxes) > 1:
+                # Keep all the small boxes, skip the big box
+                final_boxes.extend(contained_small_boxes)
+                boxes_to_skip.add(i)
             else:
-                # Keep the merged box if it doesn't cover multiple smaller boxes
-                final_boxes.append(merged_box)
-
+                # Keep the current box (either it contains no small boxes or only one)
+                final_boxes.append(current_box)
+        
+        # Apply NMS to remove nearly identical overlapping boxes
+        final_boxes = self.non_maximum_suppression(final_boxes, iou_threshold=self.nms_iou_threshold)
+        
         return final_boxes
 
     def merge_boxes(
         self,
         boxes: List[Tuple[int, int, int, int]],
-        strategy: Literal["ignore_detail", "keep_detail"] = "ignore_detail",
+        strategy: Literal["ignore_detail", "keep_detail"] | None = None,
     ) -> List[Tuple[int, int, int, int]]:
-        """Merge boxes using specified strategy."""
+        """Merge boxes using specified strategy. If strategy is None, use the default strategy."""
+        if strategy is None:
+            strategy = self.merge_strategy or "ignore_detail"
+
         if strategy == "ignore_detail":
             return self.merge_boxes_ignore_detail(boxes)
         elif strategy == "keep_detail":
@@ -469,11 +524,13 @@ class UnifiedSegmenter:
         )
         steps.update(steps_edge)
         steps_color, color_boxes = self.detect_color_regions(image)
+        color_boxes.sort(key=lambda x: (x[1], x[0]))
         steps.update(steps_color)
 
         edge_boxes = self.detect_edge_boxes(steps_edge["combined"])
 
-        edge_boxes = self.merge_boxes(edge_boxes, strategy="keep_detail")
+        edge_boxes.sort(key=lambda x: (x[1], x[0]))
+        # edge_boxes = self.merge_boxes(edge_boxes, strategy="keep_detail")
         color_boxes = self.merge_boxes(color_boxes, strategy="ignore_detail")
 
         # Add type prefixes to boxes
@@ -579,8 +636,9 @@ class UnifiedSegmenter:
             else:
                 color = palette[comp["id"] % len(palette)]
             cv2.rectangle(vis, (x, y), (x + w, y + h), color, 2)
-            label = f"{comp['id']}: {comp['type']}"
-            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+            # label = f"{comp['id']}: {comp['type']}"
+            label = f"{comp['id']}"
+            label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.3, 1)
             label_y = y - 10 if y - 10 > 10 else y + 20
             cv2.rectangle(
                 vis,
