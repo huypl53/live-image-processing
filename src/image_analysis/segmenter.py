@@ -41,17 +41,18 @@ class UnifiedSegmenter:
         # Default parameters
         self.min_component_area = 100
         self.max_component_area = 1_000_000
+        self.max_image_area_ratio = 0.95  # Maximum area as ratio of image area
         self.merge_threshold = 10
-        self.group_x = 20
-        self.group_y = 15
+        self.group_x = 15
+        self.group_y = 5
         self.table_aspect_ratio_threshold = 2.0
         self.blur_kernel = 3
         self.adaptive_block_size = 11
         self.adaptive_c = 2
         self.adaptive_method = "gaussian"  # 'mean' or 'gaussian'
         self.morph_op = "close"  # 'dilate', 'erode', 'open', 'close'
-        self.morph_kernel = 3
-        self.morph_iter = 2
+        self.morph_kernel = 5
+        self.morph_iter = 1
 
         # Edge detection options
         self.use_canny = True
@@ -175,6 +176,8 @@ class UnifiedSegmenter:
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         mask_total = np.zeros(hsv.shape[:2], dtype=np.uint8)
         all_regions = []
+        image_area = image.shape[0] * image.shape[1]
+        max_allowed_area = image_area * self.max_image_area_ratio
 
         for lower, upper in self.color_ranges:
             lower, upper = np.array(lower, dtype=np.uint8), np.array(
@@ -204,7 +207,7 @@ class UnifiedSegmenter:
             )
             for contour in contours:
                 area = cv2.contourArea(contour)
-                if area > self.min_component_area:
+                if area > self.min_component_area and area < max_allowed_area:
                     x, y, w, h = cv2.boundingRect(contour)
                     if w > 20 and h > 10:
                         all_regions.append((x, y, w, h))
@@ -220,11 +223,14 @@ class UnifiedSegmenter:
 
     def detect_edge_boxes(self, im: np.ndarray) -> List[Tuple[int, int, int, int]]:
         contours, _ = cv2.findContours(im, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        edge_boxes = [
-            cv2.boundingRect(c)
-            for c in contours
-            if cv2.contourArea(c) > self.min_component_area
-        ]
+        image_area = im.shape[0] * im.shape[1]
+        max_allowed_area = image_area * self.max_image_area_ratio
+        
+        edge_boxes = []
+        for c in contours:
+            if cv2.contourArea(c) > self.min_component_area and cv2.contourArea(c) < max_allowed_area:
+                x, y, w, h = cv2.boundingRect(c)
+                edge_boxes.append((x, y, w, h))
         return edge_boxes
 
     def find_components(
@@ -234,11 +240,15 @@ class UnifiedSegmenter:
     ) -> List[Tuple[int, int, int, int]]:
         # Filter by area and aspect ratio
         filtered = []
+        image_area = image_shape[0] * image_shape[1]
+        max_allowed_area = image_area * self.max_image_area_ratio
+        
         for x, y, w, h in all_boxes:
             area = w * h
             aspect = w / h if h > 0 else 0
             if (
                 self.min_component_area <= area <= self.max_component_area
+                and area < max_allowed_area  # Additional check for large boxes
                 and self.min_aspect_ratio <= aspect <= self.max_aspect_ratio
                 and w > 10
                 and h > 10
@@ -543,11 +553,6 @@ class UnifiedSegmenter:
         all_boxes = [(x, y, w, h) for x, y, w, h, _ in all_boxes_with_type]
         boxes = self.find_components(all_boxes, image.shape)
 
-        # # Create a mapping from processed boxes back to their types
-        # box_type_map = {}
-        # for x, y, w, h, box_type in all_boxes_with_type:
-        #     box_type_map[(x, y, w, h)] = box_type
-
         # Reconstruct boxes with their types
         final_boxes = []
         for x, y, w, h in boxes:
@@ -563,6 +568,7 @@ class UnifiedSegmenter:
                     box_type = orig_type
                     break
             final_boxes.append((x, y, w, h, box_type))
+        
 
         components = self.box2component_with_type(final_boxes, image)
         components.sort(key=lambda c: (c["bbox"]["y"], c["bbox"]["x"], -c["area"]))

@@ -217,7 +217,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                 merge_thresh_slider = gr.Slider(
                     0,
                     100,
-                    value=20,
+                    value=10,
                     step=1,
                     label="Merge Distance Threshold",
                     info="How close (in pixels) two components can be before being merged into one.",
