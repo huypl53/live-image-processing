@@ -1,0 +1,61 @@
+# Unified Segmenter Configuration
+
+# Basic component filtering parameters
+min_component_area: 50
+max_component_area: 1000000
+max_image_area_ratio: 0.95  # Maximum area as ratio of image area
+
+# Merging parameters
+merge_threshold: 15
+group_x: 10
+group_y: 5
+
+# Component classification
+table_aspect_ratio_threshold: 2.0
+
+# Preprocessing parameters
+blur_kernel: 1
+adaptive_block_size: 11
+adaptive_c: 2
+adaptive_method: "gaussian"  # 'mean' or 'gaussian'
+
+# Morphological operations
+use_morph: true
+morph_op: "close"  # 'dilate', 'erode', 'open', 'close'
+morph_kernel: 3
+morph_iter: 1
+
+# Edge detection options
+use_canny: false
+canny_low: 50
+canny_high: 150
+canny_aperture: 3
+
+# Color detection options
+color_ranges:
+  - [[40, 50, 50], [80, 255, 255]]  # green
+  - [[100, 50, 50], [130, 255, 255]]  # blue
+  - [[0, 0, 100], [180, 30, 200]]  # gray/white
+
+color_morph_kernel: 1
+color_morph_iter: 1
+use_color_close: true
+use_color_open: true
+
+# Box processing options
+enable_merge: true
+iou_threshold: 0.15  # IoU threshold for keep_detail strategy
+
+# Aspect ratio filtering
+min_aspect_ratio: 0.05
+max_aspect_ratio: 70.0
+
+# Merge strategy
+merge_strategy: "ignore_detail"  # 'ignore_detail', 'keep_detail', 'spatial_relation'
+nms_iou_threshold: 0.8  # High threshold for NMS after keep-detail merging
+
+# Spatial relation merging parameters
+spatial_x_threshold: 20  # Distance threshold for x-coordinate grouping
+spatial_y_threshold: 15   # Distance threshold for y-coordinate grouping
+spatial_w_threshold: 0.3  # Width similarity threshold (ratio)
+spatial_h_threshold: 0.3  # Height similarity threshold (ratio)

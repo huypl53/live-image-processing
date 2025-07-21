@@ -5,8 +5,10 @@ import tempfile
 
 import cv2
 import gradio as gr
+import yaml
 
 from image_analysis.segmenter import UnifiedSegmenter
+from image_analysis.config import load_segmenter_config, save_segmenter_config
 
 
 # --- Gradio UI ---
@@ -18,6 +20,7 @@ def process_and_update(
     input_image_rgb,
     min_area,
     max_area,
+    iou_threshold,
     merge_dist,
     group_x,
     group_y,
@@ -59,7 +62,6 @@ def process_and_update(
             None,
             None,
             None,
-            None,
             "Status: Please upload an image.",
             None,
         )
@@ -69,38 +71,39 @@ def process_and_update(
 
     try:
         # Update segmenter parameters from UI
-        segmenter.min_component_area = min_area
-        segmenter.max_component_area = max_area
-        segmenter.merge_threshold = merge_dist
-        segmenter.group_x = group_x
-        segmenter.group_y = group_y
-        segmenter.table_aspect_ratio_threshold = table_ratio
-        segmenter.blur_kernel = blur_kernel
-        segmenter.adaptive_block_size = block_size
-        segmenter.adaptive_c = c_val
-        segmenter.adaptive_method = adaptive_method
-        segmenter.morph_op = morph_op
-        segmenter.morph_kernel = morph_kernel
-        segmenter.morph_iter = morph_iter
-        segmenter.min_aspect_ratio = min_aspect
-        segmenter.max_aspect_ratio = max_aspect
-
-        # Edge detection options
-        segmenter.use_canny = use_canny
-        segmenter.use_morph = use_morph
-        segmenter.canny_low = canny_low
-        segmenter.canny_high = canny_high
-        segmenter.canny_aperture = canny_aperture
-
-        # Color detection options
-        segmenter.color_morph_kernel = color_morph_kernel
-        segmenter.color_morph_iter = color_morph_iter
-        segmenter.use_color_close = use_color_close
-        segmenter.use_color_open = use_color_open
-
-        # Box processing options
-        segmenter.enable_merge = enable_merge
-        segmenter.merge_strategy = merge_strategy
+        config_update = {
+            "min_component_area": min_area,
+            "max_component_area": max_area,
+            "iou_threshold": iou_threshold,
+            "merge_threshold": merge_dist,
+            "group_x": group_x,
+            "group_y": group_y,
+            "table_aspect_ratio_threshold": table_ratio,
+            "blur_kernel": blur_kernel,
+            "adaptive_block_size": block_size,
+            "adaptive_c": c_val,
+            "adaptive_method": adaptive_method,
+            "morph_op": morph_op,
+            "morph_kernel": morph_kernel,
+            "morph_iter": morph_iter,
+            "min_aspect_ratio": min_aspect,
+            "max_aspect_ratio": max_aspect,
+            # Edge detection options
+            "use_canny": use_canny,
+            "use_morph": use_morph,
+            "canny_low": canny_low,
+            "canny_high": canny_high,
+            "canny_aperture": canny_aperture,
+            # Color detection options
+            "color_morph_kernel": color_morph_kernel,
+            "color_morph_iter": color_morph_iter,
+            "use_color_close": use_color_close,
+            "use_color_open": use_color_open,
+            # Box processing options
+            "enable_merge": enable_merge,
+            "merge_strategy": merge_strategy,
+        }
+        segmenter.update_config(config_update)
 
         image_bgr = cv2.cvtColor(input_image_rgb, cv2.COLOR_RGB2BGR)
         seg_result = segmenter.segment(image_bgr)
@@ -199,7 +202,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                 "Segmentation Parameters", open=True, elem_id="param-col"
             ):
                 min_area_slider = gr.Slider(
-                    100,
+                    5,
                     10000,
                     value=100,
                     step=100,
@@ -213,6 +216,14 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                     step=10000,
                     label="Max Component Area",
                     info="Maximum pixel area for a detected region. Decrease to ignore very large (background) regions.",
+                )
+                iou_threshold_slider = gr.Slider(
+                    0.0,
+                    1.0,
+                    value=0.15,
+                    step=0.01,
+                    label="IoU Threshold",
+                    info="IoU threshold for merging boxes. Increase to merge more boxes.",
                 )
                 merge_thresh_slider = gr.Slider(
                     0,
@@ -320,7 +331,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                 )
                 # Add edge detection options
                 use_canny_checkbox = gr.Checkbox(
-                    value=True, label="Use Canny Edge Detection"
+                    value=False, label="Use Canny Edge Detection"
                 )
                 canny_low_slider = gr.Slider(
                     0, 255, value=50, step=1, label="Canny Low Threshold"
@@ -399,6 +410,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
     def save_params_fn(
         min_area,
         max_area,
+        iou_threshold,
         merge_dist,
         group_x,
         group_y,
@@ -414,29 +426,29 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
         max_aspect,
     ):
         import tempfile
-        import json
         import os
 
         params = {
-            "min_area": min_area,
-            "max_area": max_area,
-            "merge_dist": merge_dist,
+            "min_component_area": min_area,
+            "max_component_area": max_area,
+            "nms_iou_threshold": iou_threshold,
+            "merge_threshold": merge_dist,
             "group_x": group_x,
             "group_y": group_y,
-            "table_ratio": table_ratio,
+            "table_aspect_ratio_threshold": table_ratio,
             "blur_kernel": blur_kernel,
-            "block_size": block_size,
-            "c_val": c_val,
+            "adaptive_block_size": block_size,
+            "adaptive_c": c_val,
             "adaptive_method": adaptive_method,
             "morph_op": morph_op,
             "morph_kernel": morph_kernel,
             "morph_iter": morph_iter,
-            "min_aspect": min_aspect,
-            "max_aspect": max_aspect,
+            "min_aspect_ratio": min_aspect,
+            "max_aspect_ratio": max_aspect,
         }
-        fd, path = tempfile.mkstemp(suffix="_params.json")
+        fd, path = tempfile.mkstemp(suffix="_params.yaml")
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(params, f, indent=2)
+            yaml.dump(params, f, default_flow_style=False, indent=2, allow_unicode=True)
         os.close(fd)
         return path
 
@@ -444,6 +456,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
     all_sliders = [
         min_area_slider,
         max_area_slider,
+        iou_threshold_slider,
         merge_thresh_slider,
         group_x_slider,
         group_y_slider,
@@ -475,6 +488,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
         input_image,
         min_area_slider,
         max_area_slider,
+        iou_threshold_slider,
         merge_thresh_slider,
         group_x_slider,
         group_y_slider,
@@ -524,6 +538,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
         inputs=[
             min_area_slider,
             max_area_slider,
+            iou_threshold_slider,
             merge_thresh_slider,
             group_x_slider,
             group_y_slider,
