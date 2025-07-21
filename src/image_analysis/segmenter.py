@@ -39,23 +39,23 @@ class SegResult(TypedDict):
 class UnifiedSegmenter:
     def __init__(self):
         # Default parameters
-        self.min_component_area = 100
+        self.min_component_area = 50
         self.max_component_area = 1_000_000
         self.max_image_area_ratio = 0.95  # Maximum area as ratio of image area
         self.merge_threshold = 10
-        self.group_x = 15
+        self.group_x = 10
         self.group_y = 5
         self.table_aspect_ratio_threshold = 2.0
-        self.blur_kernel = 3
+        self.blur_kernel = 1
         self.adaptive_block_size = 11
         self.adaptive_c = 2
         self.adaptive_method = "gaussian"  # 'mean' or 'gaussian'
         self.morph_op = "close"  # 'dilate', 'erode', 'open', 'close'
-        self.morph_kernel = 5
+        self.morph_kernel = 3
         self.morph_iter = 1
 
         # Edge detection options
-        self.use_canny = True
+        self.use_canny = False
         self.use_morph = True
         self.canny_low = 50
         self.canny_high = 150
@@ -79,8 +79,14 @@ class UnifiedSegmenter:
         self.min_aspect_ratio = 0.05
         self.max_aspect_ratio = 70.0
 
-        self.merge_strategy: Literal["ignore_detail", "keep_detail"] | None = None
+        self.merge_strategy: Literal["ignore_detail", "keep_detail"] | None = 'ignore_detail'
         self.nms_iou_threshold = 0.8  # High threshold for NMS after keep-detail merging
+
+        # Spatial relation merging parameters
+        self.spatial_x_threshold = 20  # Distance threshold for x-coordinate grouping
+        self.spatial_y_threshold = 15   # Distance threshold for y-coordinate grouping
+        self.spatial_w_threshold = 0.3  # Width similarity threshold (ratio)
+        self.spatial_h_threshold = 0.3  # Height similarity threshold (ratio)
 
     def preprocess(self, image: np.ndarray) -> Dict[str, np.ndarray]:
         steps = {}
@@ -491,10 +497,69 @@ class UnifiedSegmenter:
         
         return final_boxes
 
+    def merge_boxes_spatial_relation(
+        self, boxes: List[Tuple[int, int, int, int]]
+    ) -> List[Tuple[int, int, int, int]]:
+        """
+        Merge boxes based on spatial proximity and dimensions.
+        This method groups similar boxes by their x, y coordinates, width, and height
+        before applying the final merge strategy.
+        
+        The process:
+        1. Group boxes by spatial proximity (x, y) and similar dimensions (w, h)
+        2. Apply keep_detail strategy within each group
+        3. Apply NMS to remove nearly identical overlapping boxes
+        """
+        if not boxes:
+            return []
+
+        # Create a dictionary to group boxes by their spatial characteristics
+        grouped_boxes: Dict[Tuple[int, int, int, int], List[Tuple[int, int, int, int]]] = {}
+
+        for box in boxes:
+            x, y, w, h = box
+            # Create a unique key for grouping based on spatial proximity and dimensions
+            # Use integer division to create spatial bins
+            spatial_x_bin = int(x / self.spatial_x_threshold)
+            spatial_y_bin = int(y / self.spatial_y_threshold)
+            
+            # Group by similar dimensions (width and height)
+            # Use absolute thresholds for dimension grouping
+            w_bin = int(w / max(1, int(w * self.spatial_w_threshold)))
+            h_bin = int(h / max(1, int(h * self.spatial_h_threshold)))
+            
+            group_key = (spatial_x_bin, spatial_y_bin, w_bin, h_bin)
+            
+            if group_key not in grouped_boxes:
+                grouped_boxes[group_key] = []
+            grouped_boxes[group_key].append(box)
+
+        # Apply the final merge strategy to each group
+        final_merged_boxes = []
+        for group_key, group_boxes in grouped_boxes.items():
+            if len(group_boxes) == 1:
+                # Single box in group, keep as is
+                final_merged_boxes.extend(group_boxes)
+            else:
+                # Multiple boxes in group, apply keep_detail strategy
+                # Sort boxes within the group by area (smallest first)
+                sorted_group_boxes = sorted(group_boxes, key=lambda box: box[2] * box[3])
+                
+                # Apply the keep_detail strategy to the group
+                merged_group_boxes = self.merge_boxes_keep_detail(sorted_group_boxes)
+                
+                # Add the merged boxes from this group to the final result
+                final_merged_boxes.extend(merged_group_boxes)
+
+        # Apply NMS to remove nearly identical overlapping boxes across all groups
+        final_merged_boxes = self.non_maximum_suppression(final_merged_boxes, iou_threshold=self.nms_iou_threshold)
+        
+        return final_merged_boxes
+
     def merge_boxes(
         self,
         boxes: List[Tuple[int, int, int, int]],
-        strategy: Literal["ignore_detail", "keep_detail"] | None = None,
+        strategy: Literal["ignore_detail", "keep_detail", "spatial_relation"] | None = None,
     ) -> List[Tuple[int, int, int, int]]:
         """Merge boxes using specified strategy. If strategy is None, use the default strategy."""
         if strategy is None:
@@ -504,6 +569,8 @@ class UnifiedSegmenter:
             return self.merge_boxes_ignore_detail(boxes)
         elif strategy == "keep_detail":
             return self.merge_boxes_keep_detail(boxes)
+        elif strategy == "spatial_relation":
+            return self.merge_boxes_spatial_relation(boxes)
         else:
             raise ValueError(f"Unknown merge strategy: {strategy}")
 

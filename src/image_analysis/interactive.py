@@ -225,7 +225,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                 group_x_slider = gr.Slider(
                     0,
                     200,
-                    value=40,
+                    value=10,
                     step=1,
                     label="Group X Threshold",
                     info="Horizontal distance for grouping/merging components in the same row.",
@@ -233,7 +233,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                 group_y_slider = gr.Slider(
                     0,
                     200,
-                    value=30,
+                    value=5,
                     step=1,
                     label="Group Y Threshold",
                     info="Vertical distance for grouping/merging components in the same column.",
@@ -247,9 +247,9 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                     info="Width-to-height ratio above which a component is classified as a table.",
                 )
                 blur_kernel_slider = gr.Slider(
-                    1,
+                    0,
                     15,
-                    value=3,
+                    value=1,
                     step=2,
                     label="Gaussian Blur Kernel Size (odd)",
                     info="Size of the Gaussian blur kernel (must be odd); helps reduce noise before thresholding.",
@@ -350,7 +350,7 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                     info="Enable merging of nearby boxes. Disable to keep all detected boxes separate."
                 )
                 merge_strategy_radio = gr.Radio(
-                    ["ignore_detail", "keep_detail"],
+                    ["ignore_detail", "keep_detail", "spatial_relation"],
                     value="ignore_detail",
                     label="Merge Strategy",
                     info="Strategy for merging boxes: 'ignore_detail' merges boxes based on their bounding box, 'keep_detail' merges boxes based on their detail.",
