@@ -59,3 +59,7 @@ spatial_x_threshold: 20  # Distance threshold for x-coordinate grouping
 spatial_y_threshold: 15   # Distance threshold for y-coordinate grouping
 spatial_w_threshold: 0.3  # Width similarity threshold (ratio)
 spatial_h_threshold: 0.3  # Height similarity threshold (ratio)
+
+
+proximity_max_small_area: 7000  # Maximum area of small boxes
+proximity_threshold: 10  # Distance threshold for considering boxes "near" each other

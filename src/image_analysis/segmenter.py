@@ -95,6 +95,11 @@ class UnifiedSegmenter:
         self.spatial_w_threshold = config.get("spatial_w_threshold", 0.3)
         self.spatial_h_threshold = config.get("spatial_h_threshold", 0.3)
 
+        self.proximity_max_small_area = config.get(
+            "proximity_max_small_area", 7000
+        )
+        self.proximity_threshold = config.get("proximity_threshold", 10)
+
     def update_config(self, config: Dict[str, Any]) -> None:
         """
         Update segmenter configuration at runtime.
@@ -462,8 +467,7 @@ class UnifiedSegmenter:
         merged = [box for box in boxes]
         merged = self.merge_boxes_proximity(
             merged,
-            max_small_area=8000,
-            proximity_threshold=self.merge_threshold,
+            proximity_threshold=self.proximity_threshold,
         )
         changed = True
         while changed:
@@ -639,11 +643,125 @@ class UnifiedSegmenter:
 
         return final_merged_boxes
 
+    def merge_small_with_big_boxes(
+        self,
+        boxes: List[Tuple[int, int, int, int]],
+        max_small_area: int | None = None,
+        big_small_proximity_threshold: int | None = None,
+    ) -> List[Tuple[int, int, int, int]]:
+        """
+        Merge small boxes that are close to big boxes by expanding the big boxes.
+        
+        Args:
+            boxes: List of boxes in (x, y, w, h) format
+            max_small_area: Maximum area for a box to be considered "small" 
+            big_small_proximity_threshold: Distance threshold for small boxes to join big boxes
+        
+        Returns:
+            List of merged boxes
+        """
+        if not boxes:
+            return []
+            
+        if max_small_area is None:
+            max_small_area = self.proximity_max_small_area
+        if big_small_proximity_threshold is None:
+            big_small_proximity_threshold = self.proximity_threshold # Allow larger distance for big-small merging
+            
+        # Separate small and big boxes
+        small_boxes = []
+        big_boxes = []
+        
+        for x, y, w, h in boxes:
+            area = w * h
+            if area <= max_small_area:
+                small_boxes.append((x, y, w, h))
+            else:
+                big_boxes.append((x, y, w, h))
+                
+        if not small_boxes or not big_boxes:
+            return boxes  # No merging possible
+            
+        # For each small box, find the closest big box
+        small_to_big_mapping = {}
+        
+        for small_box in small_boxes:
+            sx, sy, sw, sh = small_box
+            best_big_box = None
+            min_distance = float('inf')
+            
+            for big_box in big_boxes:
+                bx, by, bw, bh = big_box
+                
+                # Calculate distance between closest edges
+                # Horizontal distance
+                if sx + sw < bx:  # small box is to the left of big box
+                    h_distance = bx - (sx + sw)
+                elif bx + bw < sx:  # small box is to the right of big box
+                    h_distance = sx - (bx + bw)
+                else:  # boxes overlap horizontally
+                    h_distance = 0
+                
+                # Vertical distance
+                if sy + sh < by:  # small box is above big box
+                    v_distance = by - (sy + sh)
+                elif by + bh < sy:  # small box is below big box
+                    v_distance = sy - (by + bh)
+                else:  # boxes overlap vertically
+                    v_distance = 0
+                
+                # Total distance is the Euclidean distance between closest edges
+                distance = (h_distance ** 2 + v_distance ** 2) ** 0.5
+                
+                # Check if boxes are close enough to merge
+                if distance <= big_small_proximity_threshold:
+                    if distance < min_distance:
+                        min_distance = distance
+                        best_big_box = big_box
+            
+            if best_big_box is not None:
+                small_to_big_mapping[small_box] = best_big_box
+        
+        # Group big boxes with their associated small boxes
+        big_box_groups = {}
+        for small_box, big_box in small_to_big_mapping.items():
+            if big_box not in big_box_groups:
+                big_box_groups[big_box] = []
+            big_box_groups[big_box].append(small_box)
+        
+        # Merge each group
+        final_boxes = []
+        processed_big_boxes = set()
+        
+        for big_box, small_boxes_group in big_box_groups.items():
+            # Merge big box with its associated small boxes
+            all_boxes_in_group = [big_box] + small_boxes_group
+            min_x = min(box[0] for box in all_boxes_in_group)
+            min_y = min(box[1] for box in all_boxes_in_group)
+            max_x = max(box[0] + box[2] for box in all_boxes_in_group)
+            max_y = max(box[1] + box[3] for box in all_boxes_in_group)
+            
+            merged_box = (min_x, min_y, max_x - min_x, max_y - min_y)
+            final_boxes.append(merged_box)
+            processed_big_boxes.add(big_box)
+        
+        # Add remaining big boxes that weren't merged
+        for big_box in big_boxes:
+            if big_box not in processed_big_boxes:
+                final_boxes.append(big_box)
+        
+        # Add remaining small boxes that weren't merged
+        for small_box in small_boxes:
+            if small_box not in small_to_big_mapping:
+                final_boxes.append(small_box)
+        
+        return final_boxes
+
     def merge_boxes_proximity(
         self,
         boxes: List[Tuple[int, int, int, int]],
-        max_small_area: int = 5000,
-        proximity_threshold: int = 10,
+        max_small_area: int | None = None,
+        proximity_threshold: int | None = None,
     ) -> List[Tuple[int, int, int, int]]:
         """
         Merge boxes that are small enough and near each other based on proximity criteria.
@@ -658,6 +776,10 @@ class UnifiedSegmenter:
         """
         if not boxes:
             return []
+        if max_small_area is None:
+            max_small_area = self.proximity_max_small_area
+        if proximity_threshold is None:
+            proximity_threshold = self.proximity_threshold
 
         # Filter to only small boxes
         small_boxes = []
@@ -743,6 +865,12 @@ class UnifiedSegmenter:
         merged_boxes = self.non_maximum_suppression(
             merged_boxes, iou_threshold=self.nms_iou_threshold
         )
+        
+        # Apply additional merge step: small boxes join nearby big boxes
+        merged_boxes = self.merge_small_with_big_boxes(
+            merged_boxes, 
+            max_small_area=max_small_area
+        )
 
         return merged_boxes
 
@@ -790,6 +918,7 @@ class UnifiedSegmenter:
     def segment(self, image: np.ndarray) -> SegResult:
         # 1. Remember the current config of segmenter
         original_config = self.get_config()
+        self.image_area = image.shape[0] * image.shape[1]
 
         # 2. First use current strategy to detect large boxes (≥20% of image area)
         steps = {}
@@ -818,8 +947,7 @@ class UnifiedSegmenter:
         boxes = self.find_components(all_boxes, image.shape)
 
         # Find large boxes (≥20% of image area)
-        image_area = image.shape[0] * image.shape[1]
-        large_box_threshold = 0.20 * image_area
+        large_box_threshold = 0.20 * self.image_area
         large_boxes = []
         for x, y, w, h in boxes:
             box_area = w * h
@@ -982,11 +1110,11 @@ if __name__ == "__main__":
         cv2.moveWindow(image_in.name, 120, 60)
         cv2.imshow(image_in.name, vis_image_rgb)
         cv2.waitKey(0)
-        cv2.destroyAllWindows()
     elif image_in.is_dir():
         for image_path in image_in.glob("*.png"):
             segmenter = UnifiedSegmenter()
             input_image_rgb = cv2.imread(str(image_path))
+            print(f"Processing {image_path.name} - {input_image_rgb.shape}")
             image_bgr = cv2.cvtColor(input_image_rgb, cv2.COLOR_RGB2BGR)
             seg_result = segmenter.segment(image_bgr)
             vis_image_bgr = segmenter.draw_segmentation(
@@ -996,7 +1124,12 @@ if __name__ == "__main__":
             cv2.namedWindow(image_path.name)
             cv2.moveWindow(image_path.name, 120, 60)
             cv2.imshow(image_path.name, vis_image_rgb)
-            cv2.waitKey(0)
+            k = cv2.waitKey(0)
+            if k == ord('q'):
+                cv2.destroyWindow(image_path.name)
+                break
             cv2.destroyWindow(image_path.name)
     else:
         print("No image found")
+
+    cv2.destroyAllWindows()
