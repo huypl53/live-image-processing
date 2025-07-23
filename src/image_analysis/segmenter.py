@@ -1,16 +1,9 @@
-from ntpath import isfile
 import cv2
 import numpy as np
-from typing import Any, Dict, List, Literal, Tuple, TypedDict, Optional
-
-# Use matplotlib's colormap for a diverse color palette (BGR)
+from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
 import matplotlib.pyplot as plt
-import numpy as np
 
 from image_analysis.config import load_segmenter_config
-
-# Import the noise generation function
-from auto_design.utils.image import generate_random_noise_image
 
 num_colors = 64
 cmap = plt.get_cmap("tab20", num_colors)
