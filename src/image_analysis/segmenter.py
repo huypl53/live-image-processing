@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
 import matplotlib.pyplot as plt
 
 from image_analysis.config import load_segmenter_config
+from image_analysis.models import Box, BoxComponent, SegResult
 
 num_colors = 64
 cmap = plt.get_cmap("tab20", num_colors)
@@ -12,27 +13,6 @@ for i in range(num_colors):
     rgb = np.array(cmap(i)[:3]) * 255
     bgr = tuple(int(x) for x in rgb[::-1])
     palette.append(bgr)
-
-
-class Box(TypedDict):
-    x: int
-    y: int
-    width: int
-    height: int
-
-
-class BoxComponent(TypedDict):
-    id: int
-    type: str
-    bbox: Box
-    area: int
-
-
-class SegResult(TypedDict):
-    steps: Dict[str, np.ndarray]
-    components: List[BoxComponent]
-    total_components: int
-
 
 # --- Unified Segmenter Class ---
 class UnifiedSegmenter:
