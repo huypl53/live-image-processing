@@ -1087,6 +1087,8 @@ if __name__ == "__main__":
         seg_result = segmenter.segment(image_bgr)
         vis_image_bgr = segmenter.draw_segmentation(image_bgr, seg_result["components"])
         vis_image_rgb = cv2.cvtColor(vis_image_bgr, cv2.COLOR_BGR2RGB)
+        cv2.imwrite('./test.png', vis_image_rgb)
+        exit()
         cv2.namedWindow(image_in.name)
         cv2.moveWindow(image_in.name, 120, 60)
         cv2.imshow(image_in.name, vis_image_rgb)

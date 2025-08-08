@@ -2,7 +2,7 @@
 
 # Basic component filtering parameters
 min_component_area: 50
-max_component_area: 1000000
+max_component_area: 5000000
 max_image_area_ratio: 0.95  # Maximum area as ratio of image area
 
 # Merging parameters
