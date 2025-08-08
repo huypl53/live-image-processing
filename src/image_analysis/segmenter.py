@@ -1,7 +1,8 @@
-import cv2
-import numpy as np
 from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
+
+import cv2
 import matplotlib.pyplot as plt
+import numpy as np
 
 from image_analysis.config import load_segmenter_config
 
@@ -42,7 +43,7 @@ class UnifiedSegmenter:
 
         # Set parameters from config
         self.min_component_area = config.get("min_component_area", 50)
-        self.max_component_area = config.get("max_component_area", 1_000_000)
+        self.max_component_area = config.get("max_component_area", 5_000_000)
         self.max_image_area_ratio = config.get("max_image_area_ratio", 0.95)
         self.merge_threshold = config.get("merge_threshold", 10)
         self.group_x = config.get("group_x", 10)

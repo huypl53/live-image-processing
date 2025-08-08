@@ -1,15 +1,14 @@
 import json
-from pathlib import Path
 import shutil
 import tempfile
+from pathlib import Path
 
 import cv2
 import gradio as gr
 import yaml
 
-from image_analysis.segmenter import UnifiedSegmenter
 from image_analysis.config import load_segmenter_config, save_segmenter_config
-
+from image_analysis.segmenter import UnifiedSegmenter
 
 # --- Gradio UI ---
 segmenter = UnifiedSegmenter()
@@ -211,8 +210,8 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
                 )
                 max_area_slider = gr.Slider(
                     10000,
-                    2_000_000,
-                    value=1_000_000,
+                    3_000_000,
+                    value=2_000_000,
                     step=10000,
                     label="Max Component Area",
                     info="Maximum pixel area for a detected region. Decrease to ignore very large (background) regions.",
@@ -425,8 +424,8 @@ with gr.Blocks(title="Unified UI Image Segmenter", css=css, fill_height=True) as
         min_aspect,
         max_aspect,
     ):
-        import tempfile
         import os
+        import tempfile
 
         params = {
             "min_component_area": min_area,
